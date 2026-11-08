@@ -1,0 +1,339 @@
+# DIRECT test ROM: a long random walk on level 1 (god mode): the game must keep drawing (it once hung in draw_sprites)
+run 400
+set dbg_god 1
+set dbg_startmap 0
+set dbg_go 1
+run 400
+hold LEFT
+run 117
+release LEFT
+press A 10
+run 10
+progress refresh_count 120
+hold RIGHT
+run 82
+release RIGHT
+run 10
+progress refresh_count 120
+hold UP
+run 81
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 84
+release UP
+press B 10
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 99
+release UP
+run 10
+progress refresh_count 120
+hold RIGHT
+run 110
+release RIGHT
+run 10
+progress refresh_count 120
+hold UP
+run 32
+release UP
+run 10
+progress refresh_count 120
+hold DOWN
+run 62
+release DOWN
+press A 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 60
+release LEFT
+run 10
+progress refresh_count 120
+hold RIGHT
+run 81
+release RIGHT
+run 10
+progress refresh_count 120
+hold UP
+run 90
+release UP
+press A 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 110
+release LEFT
+run 10
+progress refresh_count 120
+hold UP
+run 98
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 113
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 92
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 89
+release UP
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 85
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 90
+release UP
+press B 10
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 89
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold RIGHT
+run 95
+release RIGHT
+press B 10
+press A 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 60
+release LEFT
+run 10
+progress refresh_count 120
+hold UP
+run 43
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 80
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 39
+release UP
+run 10
+progress refresh_count 120
+hold DOWN
+run 89
+release DOWN
+run 10
+progress refresh_count 120
+hold RIGHT
+run 55
+release RIGHT
+run 10
+progress refresh_count 120
+hold UP
+run 106
+release UP
+run 10
+progress refresh_count 120
+hold RIGHT
+run 55
+release RIGHT
+run 10
+progress refresh_count 120
+hold DOWN
+run 65
+release DOWN
+press B 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 95
+release LEFT
+run 10
+progress refresh_count 120
+hold UP
+run 22
+release UP
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 67
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 32
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 25
+release UP
+run 10
+progress refresh_count 120
+hold RIGHT
+run 97
+release RIGHT
+press A 10
+run 10
+progress refresh_count 120
+hold DOWN
+run 44
+release DOWN
+run 10
+progress refresh_count 120
+hold LEFT
+run 31
+release LEFT
+run 10
+progress refresh_count 120
+hold UP
+run 97
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 111
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 106
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 53
+release UP
+press B 10
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 64
+release UP
+press A 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 25
+release LEFT
+run 10
+progress refresh_count 120
+hold LEFT
+run 45
+release LEFT
+press B 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 92
+release LEFT
+press B 10
+run 10
+progress refresh_count 120
+hold UP
+run 120
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 87
+release UP
+press B 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 105
+release LEFT
+press B 10
+run 10
+progress refresh_count 120
+hold LEFT
+run 92
+release LEFT
+run 10
+progress refresh_count 120
+hold DOWN
+run 65
+release DOWN
+run 10
+progress refresh_count 120
+hold UP
+run 91
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 62
+release UP
+run 10
+progress refresh_count 120
+hold UP
+run 50
+release UP
+run 10
+progress refresh_count 120
+hold RIGHT
+run 56
+release RIGHT
+run 10
+progress refresh_count 120
+hold DOWN
+run 99
+release DOWN
+press B 10
+run 10
+progress refresh_count 120
+hold DOWN
+run 73
+release DOWN
+press A 10
+run 10
+progress refresh_count 120
+hold RIGHT
+run 44
+release RIGHT
+press A 10
+run 10
+progress refresh_count 120
+hold UP
+run 101
+release UP
+run 10
+progress refresh_count 120
+hold DOWN
+run 92
+release DOWN
+press A 10
+run 10
+progress refresh_count 120
+hold DOWN
+run 92
+release DOWN
+run 10
+progress refresh_count 120
+shot walk_end
+screen_ok walk_end

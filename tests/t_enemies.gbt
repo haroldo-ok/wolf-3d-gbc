@@ -1,0 +1,64 @@
+# DIRECT test ROM: an enemy is drawn and can be shot (the player is put in the room of the guard at 21,47, facing west)
+run 400
+set dbg_startmap 0
+set dbg_go 1
+run 300
+poke16 0xA00C 0x8000
+poke16 0xA00E 0x0017
+poke16 0xA010 0x8000
+poke16 0xA012 0x002F
+set 0xA014 23
+set 0xA015 47
+poke16 0xA01F 180
+set areabyplayer+0 1
+set areabyplayer+1 1
+set areabyplayer+2 1
+set areabyplayer+3 1
+set areabyplayer+4 1
+set areabyplayer+5 1
+set areabyplayer+6 1
+set areabyplayer+7 1
+set areabyplayer+8 1
+set areabyplayer+9 1
+set areabyplayer+10 1
+set areabyplayer+11 1
+set areabyplayer+12 1
+set areabyplayer+13 1
+set areabyplayer+14 1
+set areabyplayer+15 1
+set areabyplayer+16 1
+set areabyplayer+17 1
+set areabyplayer+18 1
+set areabyplayer+19 1
+set areabyplayer+20 1
+set areabyplayer+21 1
+set areabyplayer+22 1
+set areabyplayer+23 1
+set areabyplayer+24 1
+set areabyplayer+25 1
+set areabyplayer+26 1
+set areabyplayer+27 1
+set areabyplayer+28 1
+set areabyplayer+29 1
+set areabyplayer+30 1
+set areabyplayer+31 1
+set areabyplayer+32 1
+set areabyplayer+33 1
+set areabyplayer+34 1
+set areabyplayer+35 1
+set areabyplayer+36 1
+run 60
+shot en0
+screen_ok en0
+expect_ne numvis 0
+press A 10
+run 40
+press A 10
+run 40
+press A 10
+run 40
+press A 10
+run 60
+shot en1
+screen_ok en1
+expect_ne gamestate+8 0

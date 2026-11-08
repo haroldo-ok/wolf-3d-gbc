@@ -1,0 +1,16 @@
+# real ROM: in the game START opens the menu, "Back to Game" returns to the 3D view
+run 700
+press START 10
+run 90
+press A 10
+run 80
+press A 10
+run 700
+press START 40
+run 120
+shot p_menu
+screen_ok p_menu
+press B 10
+run 120
+shot p_back
+screen_ok p_back

@@ -1,0 +1,49 @@
+# DIRECT test ROM: the d-pad moves the player the right way (player object at 0xA000: x 16.16 at +12, angle at +31)
+run 400
+set dbg_startmap 0
+set dbg_go 1
+run 400
+expect 0xA00E 0x1D
+expect 0xA01F 0
+# Down: backwards (west, the wall 1.5 tiles behind stops it at x 28.x)
+hold DOWN
+run 60
+release DOWN
+run 20
+expect 0xA00E 0x1C
+# Up: forwards (east, towards the door)
+hold UP
+run 90
+release UP
+run 20
+expect_ge 0xA00E 0x1E
+# a short tap of Left turns a little (not a whole frame's worth, and not nothing)
+press LEFT 6
+run 40
+expect_ge 0xA01F 6
+expect_ne 0xA01F 0
+expect 0xA020 0
+# Right turns back past 0 (angle 359..)
+hold RIGHT
+run 40
+release RIGHT
+run 20
+expect 0xA020 1
+shot c_end
+screen_ok c_end
+# the view direction past a quarter turn (the degrees -> table index product overflowed 16 bits above 90 degrees,
+# which snapped the view back towards 0)
+poke16 0xA01F 180
+run 60
+expect cosv+1 0xFF
+expect sinv+1 0
+poke16 0xA01F 270
+run 60
+expect sinv+1 0xFF
+poke16 0xA01F 135
+run 60
+expect cosv+1 0xFF
+expect sinv+1 0
+expect_ge sinv 150
+shot c_135
+screen_ok c_135

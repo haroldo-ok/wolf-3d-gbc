@@ -1,0 +1,29 @@
+# real ROM: New Game from the menu -> "Get Psyched" -> the 3D view; walk, turn and shoot
+run 700
+press START 10
+run 90
+press A 10
+run 80
+shot g_diff
+screen_ok g_diff
+press A 10
+run 700
+shot g_view
+screen_ok g_view
+audio_ok
+hold LEFT
+run 30
+screen_changed
+release LEFT
+shot g_turn
+screen_ok g_turn
+hold UP
+run 60
+release UP
+shot g_walk
+screen_ok g_walk
+press A 30
+run 30
+shot g_shoot
+screen_ok g_shoot
+minsp 300

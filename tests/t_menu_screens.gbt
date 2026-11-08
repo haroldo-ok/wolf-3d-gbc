@@ -1,0 +1,37 @@
+# real ROM: the other control panel screens: Read This! (help pages), View Scores, Load Game, Save Game
+run 700
+press START 10
+run 90
+# Load Game
+press DOWN 10
+run 20
+press DOWN 10
+run 20
+press A 10
+run 80
+shot m_load
+screen_ok m_load
+press B 10
+run 60
+# Read This!
+press DOWN 10
+run 20
+press DOWN 10
+run 20
+press A 10
+run 200
+shot m_help1
+screen_ok m_help1
+press A 10
+run 200
+shot m_help2
+screen_ok m_help2
+press B 10
+run 200
+# View Scores
+press DOWN 10
+run 20
+press A 10
+run 250
+shot m_scores
+screen_ok m_scores 3

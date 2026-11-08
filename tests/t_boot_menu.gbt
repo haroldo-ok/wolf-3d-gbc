@@ -1,0 +1,25 @@
+# real ROM: boot -> PG13 -> title -> menu; none of the screens may be black or white
+run 120
+screen_changed
+run 240
+shot b_pg13
+screen_ok b_pg13
+run 500
+shot b_title
+screen_ok b_title 64
+audio_ok
+press START 10
+run 90
+shot b_menu
+screen_ok b_menu
+# the menu: sound page
+press DOWN 10
+run 20
+press A 10
+run 60
+shot b_sound
+screen_ok b_sound
+press B 10
+run 60
+shot b_menu2
+screen_ok b_menu2
