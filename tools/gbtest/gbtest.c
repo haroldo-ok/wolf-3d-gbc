@@ -22,6 +22,7 @@
  *   set ADDR VAL          write a byte (RAM poke, for test set up)
  *   poke16 ADDR VAL       write 16 bits
  *   wait_until ADDR VAL N run up to N frames until the byte at ADDR equals VAL, FAIL when it never does
+ *   wait_ne ADDR VAL N    run up to N frames until the byte at ADDR differs from VAL, FAIL when it never does
  *   wait_screen N         run up to N frames until the screen is ok (as screen_ok), FAIL otherwise
  *   audio_ok              FAIL unless sound samples were produced since the last audio_reset (non silent)
  *   audio_reset
@@ -236,7 +237,7 @@ static void prof_run(long frames)
             if (i < nf) cyc[i] += n;
         }
     }
-    for (int k = 0; k < 18; k++)
+    for (int k = 0; k < 45; k++)
     {
         int b = -1; for (int i = 0; i < nf; i++) if (cyc[i] && (b < 0 || cyc[i] > cyc[b])) b = i;
         if (b < 0) break;
@@ -324,7 +325,7 @@ static void calls_run(const char *name, long frames)
                 unsigned r2 = GB_read_memory(&gb, sp + 4) | (GB_read_memory(&gb, sp + 5) << 8);
                 who = sym_at(r2, GB_read_memory(&gb, sp + 3), &off);
             }
-            printf("  vbl %lu: %s from %s  HL=%04x DE=%04x BC=%04x\n", fr, name, who, gb.hl, gb.de, gb.bc);
+            printf("  vbl %lu LY %u: %s from %s  HL=%04x DE=%04x BC=%04x\n", fr, GB_read_memory(&gb, 0xFF44), name, who, gb.hl, gb.de, gb.bc);
         }
         unsigned n = GB_run(&gb) / (gb.cgb_double_speed ? 2 : 1);
         c += n; if (c >= 70224) { c -= 70224; fr++; }
@@ -359,8 +360,9 @@ static void hot_run(const char *name, long frames)
         unsigned pc = gb.pc, b = gb.mbc_rom_bank;
         unsigned n = GB_run(&gb) / (gb.cgb_double_speed ? 2 : 1);
         total += n;
-        if (pc >= a && pc < a + 0x1000 && (a < 0x4000 || b == bank)) hist[pc - a] += n;
+        if (pc >= a && pc < a + 0x1000 && (a < 0x4000 || a >= 0x8000 || b == bank)) hist[pc - a] += n;
     }
+    if (getenv("HOTALL")) { FILE *hf = fopen(getenv("HOTALL"), "a"); for (int i = 0; i < 0x1000; i++) if (hist[i]) fprintf(hf, "%x %04x %lu %lu\n", bank, a + i, hist[i], total); fclose(hf); return; }
     for (int k = 0; k < 40; k++)
     {
         int bi = -1; for (int i = 0; i < 0x1000; i++) if (hist[i] && (bi < 0 || hist[i] > hist[bi])) bi = i;
@@ -373,14 +375,15 @@ static void hot_run(const char *name, long frames)
 /* gdmalog FRAMES: every write to HDMA5: source, destination, VRAM bank, ROM bank, length, LY */
 static void gdmalog_run(long frames)
 {
-    unsigned long total = 0; unsigned h[4] = {0};
+    unsigned long total = 0, lastt = 0; unsigned h[4] = {0};
     while (total < (unsigned long)frames * 70224)
     {
         unsigned pc = gb.pc, op = GB_read_memory(&gb, pc), arg = GB_read_memory(&gb, pc + 1);
         if (op == 0xE0 && arg >= 0x51 && arg <= 0x54) h[arg - 0x51] = gb.af >> 8;
         if (op == 0xE0 && arg == 0x55)
-            printf("  pc %04x vbl %lu LY %3d: %02x%02x -> %02x%02x vbk %d rom %02x blocks %d\n", pc, total / 70224, GB_read_memory(&gb, 0xFF44),
+            printf("  pc %04x vbl %lu LY %3d (+%lu dots): %02x%02x -> %02x%02x vbk %d rom %02x blocks %d\n", pc, total / 70224, GB_read_memory(&gb, 0xFF44), total - lastt,
                    h[0], h[1], h[2] | 0x80, h[3], GB_read_memory(&gb, 0xFF4F) & 1, gb.mbc_rom_bank, ((gb.af >> 8) & 0x7F) + 1);
+        if (op == 0xE0 && arg == 0x55) lastt = total;
         if (op == 0xE0 && arg == 0x55 && getenv("JOBS"))
         {
             unsigned jb = strtol(getenv("JOBS"), NULL, 0), jh = GB_read_memory(&gb, jb + 0xA0);
@@ -664,6 +667,12 @@ int main(int argc, char **argv)
             while (lim-- > 0) { if (rd8(a) == (unsigned)v) { ok = true; break; } run_frames(1); }
             if (!ok) fail("line %d: wait_until %s == %ld timed out (now %u)", ln, a1, v, rd8(a)); else printf("wait_until %s == %ld ok\n", a1, v);
         }
+        else if (!strcmp(cmd, "wait_ne"))
+        {
+            long a = parse_addr(a1), v = strtol(a2, NULL, 0), lim = strtol(a3, NULL, 0); bool ok = false;
+            while (lim-- > 0) { if (rd8(a) != (unsigned)v) { ok = true; break; } run_frames(1); }
+            if (!ok) fail("line %d: wait_ne %s != %ld timed out", ln, a1, v); else printf("wait_ne %s = %u ok\n", a1, rd8(a));
+        }
         else if (!strcmp(cmd, "wait_screen"))
         {
             long lim = strtol(a1, NULL, 0); bool ok = false;
@@ -691,6 +700,8 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "hot")) hot_run(a1, strtol(a2, NULL, 0));
         else if (!strcmp(cmd, "gdmalog")) gdmalog_run(strtol(a1, NULL, 0));
         else if (!strcmp(cmd, "progress")) { if (!progress_run(a1, strtol(a2, NULL, 0))) fail("line %d: no progress of %s", ln, a1); }
+        else if (!strcmp(cmd, "save_state")) { if (GB_save_state(&gb, a1)) fail("line %d: save_state", ln); }
+        else if (!strcmp(cmd, "load_state")) { if (GB_load_state(&gb, a1)) fail("line %d: load_state", ln); }
         else if (!strcmp(cmd, "prof")) prof_run(strtol(a1, NULL, 0));
         else if (!strcmp(cmd, "minsp")) minsp_run(strtol(a1, NULL, 0));
         else if (!strcmp(cmd, "regs")) printf("PC=%04x SP=%04x AF=%04x BC=%04x DE=%04x HL=%04x ROMB=%02x\n", gb.pc, gb.sp, gb.af, gb.bc, gb.de, gb.hl, gb.mbc_rom_bank);

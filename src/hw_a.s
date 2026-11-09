@@ -3,7 +3,7 @@
 	.area	_CODE
 
 	.globl	_stat_phase, _live_floor, _live_hud, _live_bg, _live_obj
-	.globl	_cur_lcdc, _stat_isr, _pal_up_bg, _pal_up_obj, _oam_dma_install, _oam_dma, _gdma_run, _gd_src, _gd_dst, _gd_left, _hc_frame, _hc_bank, _hc_stream
+	.globl	_cur_lcdc, _stat_isr, _pal_up_bg, _pal_up_obj, _oam_dma_install, _oam_dma, _oam_dma_a, _gdma_run, _gdma_calibrate, _gd_fast, _gd_src, _gd_dst, _gd_left, _hc_frame, _hc_bank, _hc_stream
 
 BCPS = 0x68
 BCPD = 0x69
@@ -43,13 +43,13 @@ _stat_isr::
 	inc	hl
 	ld	d,(hl)
 	ld	c,#BCPD
+	ld	a,#47			; the next line first: a late write (a long mode 3) would miss its LY = LYC
+	ldh	(LYC),a
 	WAIT_HBLANK
 	SETP0 0
 	SETP0 1
 	SETP0 2
 	SETP0 3
-	ld	a,#47
-	ldh	(LYC),a
 	ld	a,#1
 	ld	(_stat_phase),a
 	ret
@@ -61,13 +61,13 @@ sp1:
 	inc	hl
 	ld	d,(hl)
 	ld	c,#BCPD
+	ld	a,#95
+	ldh	(LYC),a
 	WAIT_HBLANK
 	SETP0 4
 	SETP0 5
 	SETP0 6
 	SETP0 7
-	ld	a,#95
-	ldh	(LYC),a
 	ld	a,#2
 	ld	(_stat_phase),a
 	ret
@@ -76,9 +76,11 @@ sp2:
 	jr	nz,sp3
 	ld	hl,#(_live_hud + 48)
 	ld	c,#BCPD
+	ld	a,#96
+	ldh	(LYC),a
 	WAIT_HBLANK
-	ld	a,(_cur_lcdc)
-	and	a,#0xEF
+	ld	a,(_cur_lcdc)		; the view uses the signed tile addressing (0x8800..), the HUD the unsigned one
+	or	a,#0x10
 	ldh	(0x40),a
 	ld	a,#(0x80 + 48)
 	ldh	(BCPS),a
@@ -86,8 +88,6 @@ sp2:
 	ld	a,(hl+)
 	ldh	(c),a
 	.endm
-	ld	a,#96
-	ldh	(LYC),a
 	ld	a,#3
 	ld	(_stat_phase),a
 	ret
@@ -116,20 +116,20 @@ sp5:
 	ld	e,#6
 hudp:
 	ld	c,#BCPD
-	WAIT_HBLANK
+	ld	a,d			; the next line first (or no more line interrupts)
+	or	a,a
+	jr	nz,hp1
+	ldh	(STAT),a
+	jr	hp2
+hp1:	ldh	(LYC),a
+hp2:	WAIT_HBLANK
 	ld	a,b
 	ldh	(BCPS),a
 	.rept	16
 	ld	a,(hl+)
 	ldh	(c),a
 	.endm
-	ld	a,d
-	or	a,a
-	jr	nz,hp1
-	ldh	(STAT),a
-	jr	hp2
-hp1:	ldh	(LYC),a
-hp2:	ld	a,e
+	ld	a,e
 	ld	(_stat_phase),a
 sp6:
 	ret
@@ -157,29 +157,56 @@ _pal_up_obj::
 	ret
 
 ; the OAM copy from C (an inline 'call 0xFF80' hid the call from the compiler, which then kept HL across it)
-; gdma_run: copies the job in gd_src / gd_dst / gd_left (blocks of 16 bytes) to VRAM in chunks of 12 blocks
-; while LY is 144..150 (each chunk ends inside VBlank even if the DMA is twice as slow as on hardware); the
-; globals are left at what remains.
-CHUNK = 12
+; gdma_run: copies the job in gd_src / gd_dst / gd_left (blocks of 16 bytes) to VRAM during VBlank, in chunks sized
+; by the lines left: a block takes 32 dots on hardware (gd_fast, measured by gdma_calibrate: 14 blocks a line, the
+; chunk ends before the line 0 draws); where the DMA was measured slower (some emulators: twice as slow), 7 blocks a
+; line until line 152 and 3 on line 152.  The globals are left at what remains.
 	.area	_DATA
 _gd_src::	.ds	2
 _gd_dst::	.ds	2
 _gd_left::	.ds	1
+_gd_fast::	.ds	1
 	.area	_CODE
 _gdma_run::
 1$:	ldh	a,(0x44)
-	cp	a,#144
-	ret	c
-	cp	a,#151
-	ret	nc
-	ld	a,(_gd_left)
+	sub	a,#144
+	ret	c			; not in VBlank
+	cp	a,#9
+	ret	nc			; line 153 (or LY 0, its value for most of the line)
+	ld	c,a
+	ld	a,(_gd_fast)
+	rra				; bit 0: fast
+	ld	a,c
+	jr	nc,4$
+	cpl
+	add	a,#10			; fast: 14 blocks a line left (9 - (LY - 144)), less 4
+	ld	c,a
+	swap	a
+	sub	a,c
+	sub	a,c			; 14 * lines
+	sub	a,#4			; (10 to 122 blocks: one DMA)
+	ld	c,a
+	jr	6$
+4$:	cp	a,#8
+	jr	c,5$
+	ld	c,#3			; slow, line 152
+	jr	6$
+5$:	cpl
+	add	a,#9			; slow: lines left before line 152: 8 - (LY - 144)
+	ld	c,a
+	add	a,a
+	add	a,a
+	add	a,a
+	sub	a,c
+	ld	c,a			; 7 blocks a line
+6$:	ld	a,(_gd_left)
 	or	a,a
 	ret	z
-	ld	b,a
-	cp	a,#CHUNK
+	cp	a,c
 	jr	c,2$
-	ld	b,#CHUNK
-2$:	ld	hl,#_gd_src
+	ld	a,c
+2$:	ld	b,a
+	ld	hl,#_gd_src
 	ld	a,(hl+)
 	ld	e,a
 	ld	a,(hl)
@@ -204,26 +231,75 @@ _gdma_run::
 	jr	nz,3$
 	ld	a,b
 	swap	a
-	ld	c,a			; n * 16 (n <= 12)
+	ld	d,a
+	and	a,#0xF0
+	ld	c,a			; n * 16: low byte in c, high byte in d
+	ld	a,d
+	and	a,#0x0F
+	ld	d,a
 	ld	hl,#_gd_src
 	ld	a,(hl)
 	add	a,c
 	ld	(hl+),a
 	ld	a,(hl)
-	adc	a,#0
+	adc	a,d
 	ld	(hl),a
 	ld	hl,#_gd_dst
 	ld	a,(hl)
 	add	a,c
 	ld	(hl+),a
 	ld	a,(hl)
-	adc	a,#0
+	adc	a,d
 	ld	(hl),a
 	ld	hl,#_gd_left
 	ld	a,(hl)
 	sub	a,b
 	ld	(hl),a
-	jr	1$
+	jp	1$
+
+; void gdma_calibrate(void): times a DMA of 42 blocks in VBlank (to the enemies' tiles in VRAM bank 1, unused
+; outside the 3-D view), once: gd_fast = 0x81 when it took less than 4 lines (32 dots a block, as on hardware), 0x80
+; when slower.  Nothing when the display is off (measured the next time).
+_gdma_calibrate::
+	ld	a,(_gd_fast)
+	bit	7,a
+	ret	nz			; measured already
+	ldh	a,(0x40)
+	bit	7,a
+	ret	z
+	di
+1$:	ldh	a,(0x44)
+	cp	a,#143
+	jr	nz,1$
+2$:	ldh	a,(0x44)
+	cp	a,#143
+	jr	z,2$			; the start of line 144
+	ldh	a,(0x4F)
+	ld	c,a
+	ld	a,#1
+	ldh	(0x4F),a
+	xor	a,a
+	ldh	(0x51),a		; from 0x0000 (bank 0)
+	ldh	(0x52),a
+	ldh	(0x53),a		; to 0x8000
+	ldh	(0x54),a
+	ld	a,#41
+	ldh	(0x55),a
+3$:	ldh	a,(0x55)
+	inc	a
+	jr	nz,3$
+	ldh	a,(0x44)
+	ld	b,a
+	ld	a,c
+	ldh	(0x4F),a
+	ld	a,b
+	cp	a,#148
+	ld	a,#0x80			; (bit 7: measured)
+	jr	nc,4$
+	inc	a
+4$:	ld	(_gd_fast),a
+	ei
+	ret
 
 ; hc_frame: one frame of a hi-colour picture (tools/gb_hicolor.py): the palettes for line 0 at the end of VBlank,
 ; then 3 palettes (24 bytes) in every HBlank of lines 0..142, from the stream at hc_stream in ROM bank hc_bank.
@@ -280,6 +356,8 @@ _hc_frame::
 	ret
 
 _oam_dma::
+	ld	a,#0xC0
+_oam_dma_a::				; void oam_dma_a(u8 hi): the OAM copy from page hi (A)
 	jp	0xFF80
 
 _oam_dma_install::
@@ -293,7 +371,6 @@ _oam_dma_install::
 	jr	nz,1$
 	ret
 oam_stub:
-	ld	a,#0xC0
 	ldh	(0x46),a
 	ld	a,#40
 2$:	dec	a

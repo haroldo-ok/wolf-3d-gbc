@@ -2,6 +2,7 @@
  *
  *  C000-CFFF  WRAM0   globals, stack (top), statics (CR_STATLIST), doors, caster tables
  *  D000-DFFF  WRAMX   bank 1: actorat (default)   bank 2: tilemap   bank 3: frame buffer   bank 4: save buffer
+ *                     bank 5: multiply tables   bank 6: sprite staging, OAM copies   bank 7: the second frame buffer
  *  A000-BFFF  SRAM    bank 0: objlist + scratch      banks 2..: saves and high scores (bank 1: music work)
  */
 #ifndef CARTRAM_H
@@ -13,6 +14,8 @@
 #define WB_TILEMAP 2
 #define WB_FRAME   3
 #define WB_SAVE    4
+#define WB_SPRITES 6             /* the enemies' tile staging (0xD000, 0xD400) and the OAM copies (0xDC00, 0xDD00) */
+#define WB_FRAME2  7             /* the second frame buffer */
 
 #define CR_TILEMAP   0xD000      /* u8 [64][64], x major (WRAM bank 2): 0 floor, 1..63 wall (|0x40 beside a door),
                                     0x80|n door n, 0xC0|n moving push wall */

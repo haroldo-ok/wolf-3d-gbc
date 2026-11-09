@@ -19,4 +19,7 @@ data_end = v['s__DATA'] + v['l__DATA'] + v.get('l__INITIALIZED', 0)
 print('WRAM0 data ends at 0x%04X: %d bytes for the stack' % (data_end, 0xD000 - data_end))
 if 0xD000 - data_end < 340:
     print('ERROR: not enough stack'); ok = False
+m = re.search(r'^\s+([0-9A-F]{8})\s+_cr_sq\b', t, re.M)       # src/cast_a.s: the quarter squares, page aligned
+if m and int(m.group(1), 16) & 0xFFFF != 0x4000:
+    print('ERROR: _cr_sq is at %s, not at 0x4000 of its bank (src/cast_a.s must be the first of bank 5)' % m.group(1)); ok = False
 sys.exit(0 if ok else 1)

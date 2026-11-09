@@ -158,14 +158,20 @@ void ui_pal(u8 col, u8 row, u8 w, u8 pal) B
     }
 }
 
+/* by subtraction of the powers of ten (the s32 division of the library would take room in the fixed bank) */
+static const u32 pow10[10] = { 1000000000UL, 100000000UL, 10000000UL, 1000000UL, 100000UL, 10000UL, 1000UL, 100UL,
+                               10UL, 1UL };
 void ui_itoa(char *buf, s32 v) B
 {
-    char t[12];
-    u8 n = 0, i = 0;
-    if (v < 0) { buf[i++] = '-'; v = -v; }
-    if (v == 0) t[n++] = '0';
-    while (v) { t[n++] = '0' + (char)(v % 10); v /= 10; }
-    while (n) buf[i++] = t[--n];
+    u32 u;
+    u8 k, i = 0, any = 0;
+    if (v < 0) { buf[i++] = '-'; u = (u32)-v; } else u = (u32)v;
+    for (k = 0; k < 10; k++)
+    {
+        char d = '0';
+        while (u >= pow10[k]) { u -= pow10[k]; d++; }
+        if (d != '0' || any || k == 9) { buf[i++] = d; any = 1; }
+    }
     buf[i] = 0;
 }
 

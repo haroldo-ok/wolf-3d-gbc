@@ -169,7 +169,7 @@ void ControlMovement (objtype *ob) B
 	//
 		if (controlx > 0)
 		{
-			speed = (s32)controlx*MOVESCALE;	/* (computed first: SDCC 4.2 lost the angle in HL when the
+			speed = smul16(controlx, (s16)MOVESCALE);	/* (computed first: SDCC 4.2 lost the angle in HL when the
 							 * product was an argument of the call) */
 			angle = ob->angle - ANGLES/4;
 			if (angle < 0)
@@ -178,7 +178,7 @@ void ControlMovement (objtype *ob) B
 		}
 		else if (controlx < 0)
 		{
-			speed = -(s32)controlx*MOVESCALE;
+			speed = smul16(-controlx, (s16)MOVESCALE);
 			angle = ob->angle + ANGLES/4;
 			if (angle >= ANGLES)
 				angle -= ANGLES;
@@ -207,12 +207,12 @@ void ControlMovement (objtype *ob) B
 //
 	if (controly < 0)
 	{
-		speed = -(s32)controly*MOVESCALE;
+		speed = smul16(-controly, (s16)MOVESCALE);
 		Thrust (ob->angle,speed);	// move forwards
 	}
 	else if (controly > 0)
 	{
-		speed = (s32)controly*BACKMOVESCALE;
+		speed = smul16(controly, (s16)BACKMOVESCALE);
 		angle = ob->angle + ANGLES/2;
 		if (angle >= ANGLES)
 			angle -= ANGLES;

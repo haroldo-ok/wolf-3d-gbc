@@ -6,8 +6,8 @@ Episode 1 (all ten floors), with the menus, help pages, high scores, three save 
 digitised voices.
 
 * CGB only, MBC5, 4 MB ROM, 128 KB battery-backed save RAM, double speed CPU.
-* Written in C with SDCC (sm83), plus assembly for the hot paths (wall and sprite columns, ray stepping,
-  multiplication, VRAM copies, the line interrupts, the sampled voice).
+* Written in C with SDCC (sm83), plus assembly for the hot paths (ray casting, wall and sprite columns, sprite
+  projection, multiplication, VRAM copies, the line interrupts, the sampled voice).
 
 ## Controls
 
@@ -53,23 +53,42 @@ neither black nor white, with enough distinct colours.
 | `t_newgame` | New Game, Get Psyched, the 3D view, turning, walking, shooting, the stack |
 | `t_pause_menu` | START in the game, back to the game |
 | `t_controls` | Down walks back, Up forward, a short tap turns a little, the view past 90 / 180 / 270 degrees |
-| `t_enemies` | a guard is drawn and can be killed |
+| `t_enemies` | a guard is drawn (as hardware sprites) and can be killed |
 | `t_walk` | a long random walk (`tools/randwalk.py`): the game keeps drawing frames |
 | `t_intermission` | the floor-completed screen and the next floor |
 | `t_levels.sh` | each of the ten floors starts, draws, turns and walks |
 
 `tools/gbtest` also has debugging commands: `prof`, `incl`, `hot`, `calls` (profiling, with the static symbols of a
-`make prof` build), `progress` (hang detection), `watch`, `gdmalog`, `vbltrace`, `crash`, `minsp`.
+`make prof` build; `hot` writes every address with `HOTALL=file`), `save_state` / `load_state` (to profile the same
+frames again), `progress` (hang detection), `watch`, `gdmalog`, `vbltrace`, `crash`, `minsp`.
+`wait_ne ADDR VAL N` waits for a byte to change (for values that are 0 for a moment in every frame, like `numvis`).
+`tools/bench.sh` measures the speed of the 3D view (see below).
 `tools/retro.py` runs the same kind of script in a libretro core (mGBA was used to cross-check).
 
 ## How it works
 
-* **3D view**: 160x96 pixels, 40 rays of 4 pixels, drawn column-major into a frame buffer in WRAM bank 3 and
-  copied to VRAM by general purpose DMA during VBlank (chunks of 12 blocks, started only while LY is 144..150), into
-  the tile set and BG map that are not on screen; the two halves are flipped when the copy is done. Each 8x8 tile
-  has one palette, so a wall family or a sprite gets a whole tile column (sprites only on the rows they cover).
+* **3D view**: 160x96 pixels, 40 rays of 4 pixels, drawn column-major into a frame buffer in WRAM and copied to VRAM
+  by general purpose DMA during VBlank, into the tile set and BG map that are not on screen; the two halves are
+  flipped when the copy is done. Each 8x8 tile has one palette, so a wall family or a sprite gets a whole tile column
+  (sprites only on the rows they cover).
+  * The frame buffer is double: WRAM bank 3 or 7 (and the enemies' tile staging, 0xD000 or 0xD400 of bank 6, and a
+    copy of the OAM, 0xDC00 or 0xDD00) by the parity of the frame, so a frame is drawn while the previous one is
+    still being copied (up to two frames in the DMA queue; the attributes, one buffer, are copied first).
+  * The copies are sized by the VBlank lines left (`gdma_run` in `src/hw_a.s`): 14 blocks of 16 bytes a line where a
+    block takes 32 dots, as on hardware (`gdma_calibrate` times one when the play screen first opens), 7 where it
+    is slower (some emulators): about 95 blocks a VBlank, a frame (240 blocks of view, 24 of attributes, the
+    sprites) in three.
+  * `src/cast_a.s` (bank 5, with the caster's tables): a ray's set up and DDA (`dd_run`), and the texture, column,
+    height and palette of a plain wall, with 8x8 multiplies by quarter squares from a ROM table (doors and the
+    push wall stay in C); the wall loop, which clears only the rows that the last frame in that buffer drew and the
+    new walls do not cover (kept per tile column at 0xDF00 / 0xDF20 of the buffer's bank); and the projection of
+    the sprites (depth, lateral position, screen x by an 8 bit division).
+  * The column loops (`src/render_a.s`) are unrolled by 8 with the row count in HRAM (walls); a sprite column is
+    128 bytes, two a texel row (plane 0 / plane 1 as 0x00 or 0xFF, 0x55 transparent), and starts at the first row
+    the sprite (`spr_t0`) and the column (kept in a transparent row 0) draw.
 * **Line interrupts** switch the ceiling colour to the floor colour at the horizon and load the HUD tiles and
-  palettes below the view.
+  palettes below the view; each sets the next line's LYC first, before it waits for HBlank (written after a long
+  mode 3, with sprites on the line, the next LY = LYC was missed and the HUD kept the view's palettes for a frame).
 * **Hi-colour title**: the BG palettes are rewritten in every HBlank (3 palettes a line, `hc_frame` in
   `src/hw_a.s`), so each set of 4 colours covers only two lines of a few tiles: about 400 colours on screen.
   `tools/gb_hicolor.py` converts the picture.
@@ -80,8 +99,47 @@ neither black nor white, with enough distinct colours.
   the last game frame, and a quick tap of A or B is not lost.
 * The game logic (`src/game/`) is id Software's code by way of the Genesis and Game Gear ports.
 
-Speed: the 3D view draws a new frame every ~9 screen refreshes (about 6-7 frames per second), limited by the CPU
-(ray casting, wall columns and sprites).
+### Where things are
+
+| File | What |
+| --- | --- |
+| `src/render.c` | the frame (`ThreeDRefresh`): ray set up, doors and the push wall, the sprites' list, the DMA jobs (bank 5) |
+| `src/cast_a.s` | a ray's common path, the wall loop, the sprites' projection, the quarter square table (bank 5, first) |
+| `src/render_a.s` | the DDA, the wall and sprite column loops, the enemies' tile helpers (bank 0) |
+| `src/rspr.c` | the sprites: palettes, which enemies are hardware sprites, the view buffer and OAM drawing (bank 8) |
+| `src/hw.c`, `src/hw_a.s` | interrupts, the DMA queue, VBlank copies, the line interrupts, OAM DMA (bank 0) |
+| `src/weapon.c`, `src/hud.c` | the weapon (OBJ) and the status bar |
+| `src/mathz*.c/s` | 16x16 multiply, 32/16 divide (quarter squares in WRAM bank 5) |
+| `tools/build_assets.py` | the converters (`gb_view.py`: walls, sprites, scalers; `gb_hud.py`: HUD, weapon; ...) |
+
+### Memory
+
+| Where | What |
+| --- | --- |
+| ROM bank 0 | the C runtime, interrupts, the column loops, the scalers (about 350 bytes left) |
+| ROM banks 1..10 | code by module (`Makefile`); bank 5 the renderer, bank 8 the sprites |
+| ROM banks 40..210 | data (`gen/data.bin`): textures (a bank each), maps, sprites (128-byte columns), HUD, UI, sound |
+| WRAM 0 | globals, the caster's tables, the stack (`tools/checkmap.py` wants 340 bytes left) |
+| WRAM 1 / 2 | actorat / the tile map |
+| WRAM 3 / 7 | the two frame buffers (0xD000, 3840 bytes; the drawn rows of each tile column at 0xDF00 / 0xDF20) |
+| WRAM 4 / 5 | the save buffer / the quarter squares of `umul16` |
+| WRAM 6 | the enemies' tile staging (0xD000, 0xD400), the OAM copies (0xDC00, 0xDD00) |
+| HRAM | the OAM DMA stub (0xFF80), the multiply's temporaries (0xFFB0), the caster's and the wall loop's (0xFFC0..0xFFF0) |
+| VRAM 0 / 1 | 0x8000: HUD + weapon / the enemies' two tile pools; 0x8800..0x96FF: the view (one buffer in each bank) |
+| SRAM | bank 0: the actors, statics, doors and scratch; bank 1: music; banks 2..: saves, high scores |
+
+Speed: the 3D view draws a new frame every 5 to 6.5 screen refreshes (about 9 to 12.5 frames per second; the
+first port drew one every 8 to 9.5), limited by the CPU: ray casting, wall columns, the sprites, the game logic.
+`tools/bench.sh` counts the frames drawn in fixed scenes of floor 1 (10 s each):
+
+| Scene | First port | Now |
+| --- | --- | --- |
+| guard room, still | 72 | 125 |
+| guard room, turning | 65 | 107 |
+| start, still | 64 | 94 |
+| start, turning | 65 | 107 |
+| hall, turning | 65 | 108 |
+| 10 views close to items | 44 | 74 |
 
 ### SDCC 4.2 pitfalls met on the way
 
@@ -91,6 +149,11 @@ Speed: the 3D view draws a new frame every ~9 screen refreshes (about 6-7 frames
 * The banked call trampoline (`___sdcc_bcall_ehl` in `src/crt0.s`) must keep BC and DE: with `sdcccall(1)` they
   hold 16 and 32 bit return values.
 * `u16` products overflow quietly (degrees x 728 above 90 degrees).
+* Shifts by a constant can be loops over the stack (`(u16)c << 7`: seven passes); `s32` multiply and divide are
+  library calls, slow (a 32-bit multiply took about 1400 cycles) and, for the division, 800 bytes of bank 0: `smul16` / `udiv32_16` or
+  byte access instead.
+* In `sdas` macros, a parameter named like an instruction (`bit`, `sub`) breaks the expansion, and labels made by a
+  macro end the scope of the `n$` local labels around it.
 
 ## Licence notes
 

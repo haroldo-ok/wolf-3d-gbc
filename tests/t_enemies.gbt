@@ -1,4 +1,4 @@
-# DIRECT test ROM: an enemy is drawn and can be shot (the player is put in the room of the guard at 21,47, facing west)
+# DIRECT test ROM: an enemy is drawn (as hardware sprites) and can be shot (the player is put in the room of the guard at 21,47, facing west)
 run 400
 set dbg_startmap 0
 set dbg_go 1
@@ -47,16 +47,24 @@ set areabyplayer+33 1
 set areabyplayer+34 1
 set areabyplayer+35 1
 set areabyplayer+36 1
-run 60
+run 30
 shot en0
 screen_ok en0
-expect_ne numvis 0
+# (numvis and hw_n are 0 for a moment at the start of each frame's sprite passes: sample them over a few frames)
+wait_ne numvis 0 30
+# the guard, at this distance, is made of hardware sprites (src/rspr.c), above the view buffer
+wait_ne hw_n 0 30
+set godmode 1
 press A 10
-run 40
+run 16
 press A 10
-run 40
+run 16
 press A 10
-run 40
+run 16
+press A 10
+run 16
+press A 10
+run 16
 press A 10
 run 60
 shot en1

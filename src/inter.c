@@ -125,9 +125,12 @@ void LevelCompleted(void) B
         ui_text(14, 13, "%", P_TEXT);
         ui_text(1, 15, "SCORE", P_TEXT);
         ui_time(14, 5, par_sec[mapon] / 60, par_sec[mapon] % 60);
-        sec = (s16)(gamestate.TimeCount / 70);
-        if (sec > 99 * 60)
-            sec = 99 * 60;
+        {
+            u32 tc = (u32)gamestate.TimeCount;      /* (u16 division in a bank: the s32 one of the library is big) */
+            if (tc > 99UL * 60 * 70)
+                tc = 99UL * 60 * 70;
+            sec = (s16)udiv32_16(tc, 70);
+        }
         if (gamestate.TimeCount < (s32)par_sec[mapon] * 70)
             timeleft = par_sec[mapon] - sec;
         min = sec / 60;
@@ -141,11 +144,11 @@ void LevelCompleted(void) B
         scr_show();
 
         if (gamestate.killtotal)
-            kr = (s16)((gamestate.killcount * 100L) / gamestate.killtotal);
+            kr = (s16)((u16)gamestate.killcount * 100u / (u16)gamestate.killtotal);
         if (gamestate.secrettotal)
-            sr = (s16)((gamestate.secretcount * 100L) / gamestate.secrettotal);
+            sr = (s16)((u16)gamestate.secretcount * 100u / (u16)gamestate.secrettotal);
         if (gamestate.treasuretotal)
-            tr = (s16)((gamestate.treasurecount * 100L) / gamestate.treasuretotal);
+            tr = (s16)((u16)gamestate.treasurecount * 100u / (u16)gamestate.treasuretotal);
 
         bonus = timeleft * 500;
         IN_ClearKeys();
@@ -211,7 +214,7 @@ void LevelCompleted(void) B
 void Victory(void) B
 {
     s16 i, min, kr = 0, sr = 0, tr = 0;
-    s32 sec = 0;
+    u16 sec = 0;
     scr_open(UK_INTER);
     SD_StartMusic(URAHERO_MUS);
     for (i = 0; i < 8; i++)
@@ -224,8 +227,8 @@ void Victory(void) B
     kr /= 8;
     sr /= 8;
     tr /= 8;
-    min = (s16)(sec / 60);
-    sec %= 60;
+    min = (s16)(sec / 60u);
+    sec %= 60u;
     if (min > 99)
         min = sec = 99;
     ui_ctext(0, "YOU WIN!", P_YEL);

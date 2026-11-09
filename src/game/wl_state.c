@@ -944,6 +944,13 @@ s16 LineStep (s16 delta, s16 deltafrac) B
 	return neg ? -(s16)q : (s16)q;
 }
 
+/* (a * b) >> 8 by smul16 (mathz_a.s: the s32 multiply of the library is slow), bits 8..23 read as bytes */
+static s16 mulq8s (s16 a, s16 b)
+{
+	s32 v = smul16 (a, b);
+	return (s16)(((u16)((u8 *)&v)[2] << 8) | ((u8 *)&v)[1]);
+}
+
 static boolean CheckLine_ (objtype *ob);
 boolean CheckLine (objtype *ob) B
 {
@@ -994,7 +1001,7 @@ static boolean CheckLine_ (objtype *ob)
 		deltafrac = abs(x2-x1);
 		delta = y2-y1;
 		ystep = LineStep (delta, deltafrac);
-		yfrac = y1 + (((s32)ystep*partial) >>8);
+		yfrac = y1 + mulq8s(ystep, partial);
 
 		x = xt1+xstep;
 		xt2 += xstep;
@@ -1042,7 +1049,7 @@ static boolean CheckLine_ (objtype *ob)
 		deltafrac = abs(y2-y1);
 		delta = x2-x1;
 		xstep = LineStep (delta, deltafrac);
-		xfrac = x1 + (((s32)xstep*partial) >>8);
+		xfrac = x1 + mulq8s(xstep, partial);
 
 		y = yt1 + ystep;
 		yt2 += ystep;

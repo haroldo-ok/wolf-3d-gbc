@@ -6,7 +6,7 @@ extern u8 hmap[192], hatr[192];      /* cartsyms.s: DMA sources, 16 byte aligned
 static u8 hdirty;
 static u8 cur_face = 0xFF, cur_icon = 0xFF;
 
-#define HUD_VRAM 0x9000u
+#define HUD_VRAM 0x8000u                /* (the play screen's HUD uses the unsigned tile addressing: tile n at 0x8000 + 16 n) */
 
 static u8 lcd_is_on(void) { return (rLCDC & LCDC_ON) != 0; }
 

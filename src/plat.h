@@ -64,6 +64,8 @@ u8   IN_UserInput(u32 delay) B;
 void weapon_load(void) B;
 void weapon_show(u8 weapon, u8 frame) B;
 void weapon_hide(void) B;
+u8   weapon_oam(void) B;                  /* its OAM entries into oam_buf[0..n), returns n (render.c composes the rest) */
+void weapon_flush(void) B;                /* queue the tile copy of the frame (before the sprites and the flip) */
 void weapon_update(void);                 /* bank 0 */
 void rom_read(u8 bank, u16 addr, void *dst, u16 len);   /* bank 0 */
 void VW_ColorBorder(u8 color) B;

@@ -47,7 +47,9 @@ u16  rgb555(u8 r, u8 g, u8 b);
 /* GDMA queue: copies done at the start of VBlank; src is in WRAM0, a WRAM bank (swram != 0) or a ROM bank (srom != 0xFF) */
 void dma_queue(const void *src, u8 srom, u8 swram, u8 vbank, u16 dst, u16 len);
 void dma_wait(void);
-void oam_queue(void);                   /* the sprite copy, in order after the jobs queued before */
+void oam_queue(u8 swram, u8 hi);        /* the sprite copy (from page hi of WRAM bank swram), in order after the jobs queued before */
+void attr_mark_queue(void);             /* attr_busy until the jobs queued before it are done */
+extern volatile u8 vframes, attr_busy;  /* frames queued and not shown yet; attributes not copied yet */
 extern volatile u8 dma_busy;
 void flip_queue(void);                       /* after the queued copies: show the other BG map */
 extern u8 map_front;                         /* 0: 9800 shown, 1: 9C00 */

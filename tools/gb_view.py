@@ -229,9 +229,20 @@ def build_sprites(pk):
         if r is None:
             continue
         x0, x1, lv, ramp = r
+        # a column is 128 bytes, 128-byte aligned: two bytes a texel row (plane 0, plane 1: 0x00 or 0xFF; 0x55 for a
+        # transparent texel), so the column loops (src/render_a.s) index it with the scaler bytes (2 * row) directly
+        # A transparent row 0 keeps 2 * the column's first drawn row in its second byte (0xFE: none), so the loops
+        # skip the rows above it without testing each one.
         blob = bytearray()
         for x in range(x0, x1 + 1):
-            blob += bytes(int(v) for v in lv[x])
+            col = bytearray()
+            for v in lv[x]:
+                v = int(v)
+                col += bytes((0xFF if v & 1 else 0, 0xFF if v & 2 else 0)) if v else bytes((0x55, 0))
+            if col[0] == 0x55:
+                drawn = [r for r in range(64) if int(lv[x][r])]
+                col[1] = 2 * drawn[0] if drawn else 0xFE
+            blob += col
         blobs[s] = bytes(blob)
         x0s[s], x1s[s], ramps[s] = x0, x1, ramp
         rows = np.where(lv.any(axis=0))[0]          # the texel rows with something drawn
@@ -253,7 +264,7 @@ def build_sprites(pk):
         poolof[s] = int(lb[i])
     # pack, big ones first for a tight fit
     for s in sorted(ids, key=lambda s: -len(blobs[s])):
-        b, a = pk.add('spr%d' % s, blobs[s])
+        b, a = pk.add('spr%d' % s, blobs[s], align=128)
         bank[s], off[s] = b, a
     return dict(bank=bank, off=off, x0=x0s, x1=x1s, t0=t0s, t1=t1s, pool=poolof, poolpal=pool, count=len(ids))
 

@@ -25,6 +25,8 @@ u8 stat_phase;
 volatile u8 pal_pending;        /* 1: BG, 2: OBJ */
 u8 cur_lcdc;
 u8 map_front;
+volatile u8 vframes;                    /* frames queued and not yet shown (their flip has not run) */
+volatile u8 attr_busy;                  /* the attributes queued before the attr mark are not copied yet */
 
 extern void pal_up_bg(void), pal_up_obj(void), oam_dma_install(void);
 
@@ -116,7 +118,8 @@ void lcd_wait_commit(void)
 extern u16 gd_src, gd_dst;
 extern u8 gd_left;
 void gdma_run(void);                    /* hw_a.s */
-void oam_dma(void);                     /* hw_a.s */
+void oam_dma(void);                     /* hw_a.s: from 0xC000 */
+void oam_dma_a(u8 hi);                  /* hw_a.s: from page hi */
 typedef struct { const u8 *src; u16 dst; u16 blocks; u8 srom, swram, vbank, flip; } DmaJob;
 #define NJOBS 16
 static DmaJob jobs[NJOBS];
@@ -142,33 +145,30 @@ void dma_queue(const void *src, u8 srom, u8 swram, u8 vbank, u16 dst, u16 len)
     ei();
 }
 
-void oam_queue(void)
+/* a job that is not a copy: 1 the flip, 2 the OAM copy (from WRAM bank swram, page hi), 3 the end of the attributes */
+static void mark_queue(u8 kind, u8 swram, u8 hi)
 {
     DmaJob *j;
     while ((u8)(jtail + 1) % NJOBS == jhead)
         wait_vblank();
     j = &jobs[jtail];
     j->blocks = 0;
-    j->flip = 2;
+    j->flip = kind;
+    j->swram = swram;
+    j->src = (const u8 *)((u16)hi << 8);
     di();
     jtail = (u8)(jtail + 1) % NJOBS;
     dma_busy = 1;
+    if (kind == 1)
+        vframes++;
+    else if (kind == 3)
+        attr_busy = 1;
     ei();
 }
 
-void flip_queue(void)
-{
-    DmaJob *j;
-    while ((u8)(jtail + 1) % NJOBS == jhead)
-        wait_vblank();
-    j = &jobs[jtail];
-    j->blocks = 0;
-    j->flip = 1;
-    di();
-    jtail = (u8)(jtail + 1) % NJOBS;
-    dma_busy = 1;
-    ei();
-}
+void oam_queue(u8 swram, u8 hi) { mark_queue(2, swram, hi); }
+void flip_queue(void) { mark_queue(1, 0, 0); }
+void attr_mark_queue(void) { mark_queue(3, 0, 0); }
 
 void dma_wait(void)
 {
@@ -176,9 +176,9 @@ void dma_wait(void)
         wait_vblank();
 }
 
-/* The jobs run in VBlank only, after the sprites and palettes, in chunks of CHUNK blocks started while LY <= 150.
- * A block of 16 bytes takes 32 dots on hardware (a chunk ~0.85 line); emulators differ (mGBA is slower), so the
- * chunks are small enough to end inside VBlank even at twice that.
+/* The jobs run in VBlank only, after the sprites and palettes, in chunks sized by the lines of VBlank left
+ * (gdma_run: 7 blocks a line).  A block of 16 bytes takes 32 dots on hardware; emulators differ (mGBA is slower),
+ * so the chunks end inside VBlank even at twice that.
  * The budget follows the clock, not a count, so a slower DMA or a late interrupt cannot spill into the visible
  * lines.  Between jobs the timer interrupt (the sampled voice) may run. */
 
@@ -192,7 +192,15 @@ static void run_jobs(void)
         {
             if (rLY > 151)
                 break;
-            oam_dma();
+            rSVBK = j->swram;
+            oam_dma_a((u8)((u16)j->src >> 8));
+            j->flip = 0;
+            jhead = (u8)(jhead + 1) % NJOBS;
+            continue;
+        }
+        if (j->flip == 3)                       /* the attributes are copied */
+        {
+            attr_busy = 0;
             j->flip = 0;
             jhead = (u8)(jhead + 1) % NJOBS;
             continue;
@@ -202,6 +210,8 @@ static void run_jobs(void)
             map_front ^= 1;
             cur_lcdc ^= LCDC_BG9C00;
             rLCDC = cur_lcdc;
+            if (vframes)
+                vframes--;
             j->flip = 0;
             jhead = (u8)(jhead + 1) % NJOBS;
             continue;
@@ -309,6 +319,8 @@ void lcd_off(void)
 {
     if (rLCDC & LCDC_ON)
     {
+        while (dma_busy)                /* the frames still in the queue (up to two of the 3-D view) are shown first */
+            wait_vblank();
         while (rLY < 144) ;
         rLCDC = 0;
     }

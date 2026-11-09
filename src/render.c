@@ -1,21 +1,16 @@
-/* render.c - the 3-D view.  Rays are cast through the tile map (asm DDA in render_a.s) and the walls and the
- * sprites are composed into a tile frame buffer (WRAM bank 3) that is copied to VRAM by the VBlank DMA queue.
+/* render.c - the 3-D view.  Rays are cast through the tile map (asm DDA in render_a.s) and the walls and most of the
+ * sprites are composed into a tile frame buffer (WRAM bank 3) that is copied to VRAM by the VBlank DMA queue; the
+ * enemies are hardware sprites when they fit (rspr.c).
  * Two buffers (VRAM bank 0 / 1) and two maps (9800 / 9C00) are shown alternately. */
 #include "game/def.h"
 #include <string.h>
 
 /* asm interface (render_a.s) */
-extern u8  dd_var, dd_side, dd_val, dc_hi, dc_bank;
-extern u16 dd_sx, dd_sy, dd_tx, dd_ty, dd_ptr, dd_t, dc_fb, dc_sc, dc_s;
+extern u8  dd_var, dd_side, dd_val, dc_hi, dc_bank, dc_n;
+extern u16 dd_sx, dd_sy, dd_tx, dd_ty, dd_ptr, dd_t, dc_fb, dc_sc;
 void dd_run(void);
-void fb_clear(void);
 void draw_left(void);
 void draw_right(void);
-void spr_left(void);
-void spr_right(void);
-
-#define FB          0xD000
-#define COLBYTES    (VIEW_TH * 16)          /* 192: one tile column of the frame buffer */
 
 u16 r_viewx, r_viewy;
 u8  render_cast_dirty = 1;
@@ -63,312 +58,186 @@ static s16 mulq8(u16 t, s16 r)
 #define mulsat8(a, b) umulq8((a), (b))
 
 /* ------------------------------------------------------------ casting */
+/* cast_a.s: the common path of a ray; its frame constants in HRAM */
+u8 cr_ray(void);
+void draw_walls_a(void);
+#define CR_I   (*(volatile u8 *)0xFFC1)
+#define CR_FX  (*(volatile u8 *)0xFFC2)
+#define CR_FY  (*(volatile u8 *)0xFFC3)
+#define CR_MAP (*(volatile u16 *)0xFFC4)
+#define CR_FAM (*(volatile u16 *)0xFFC6)
+#define CR_RX  (*(volatile s16 *)0xFFCE)
+#define CR_RY  (*(volatile s16 *)0xFFD0)
+#define CR_FXL (*(volatile u8 *)0xFFD2)
+#define CR_FYL (*(volatile u8 *)0xFFD3)
+#define CR_SXL (*(volatile u8 *)0xFFD4)
+#define CR_SX  (*(volatile s16 *)0xFFD5)
+#define CR_SYL (*(volatile u8 *)0xFFD7)
+#define CR_SY  (*(volatile s16 *)0xFFD8)
+
 static void cast_rays(void)
 {
     s32 ax, ay, stepx, stepy;
-    s16 rx, ry, sxh, syh;               /* the ray direction in Q8 and its step: integer part ... */
-    u8 fxl, fyl, sxl, syl;              /* ... and the fraction (the Q16 values without q16q8 and 32 bit sums) */
-    const u8 *fam;
-    u8 i, fx = (u8)r_viewx, fy = (u8)r_viewy, px = r_viewx >> 8, py = r_viewy >> 8;
+    u8 i, px = r_viewx >> 8, py = r_viewy >> 8;
     u8 *map0 = (u8 *)CR_TILEMAP + ((u16)px << 6) + py;
     u8 pwx = (u8)pwallx, pwy = (u8)pwally;
     u8 pwstate = pwallstate != 0;
-    u8 famoff = (u8)gamestate.mapon;
     TM_ON();
 
     stepx = smul16(sinv, TAN36_STEP) >> 8;
     stepy = smul16(cosv, TAN36_STEP) >> 8;
-    ax = ((s32)cosv << 8) - ((stepx * (NRAYS - 1)) >> 1);
-    ay = -((s32)sinv << 8) - ((stepy * (NRAYS - 1)) >> 1);
+    /* (NRAYS - 1) / 2 = 19.5 steps back from the centre: 39 * step = 32 * step + 8 * step - step (no s32 multiply) */
+    ax = ((s32)cosv << 8) - (((stepx << 5) + (stepx << 3) - stepx) >> 1);
+    ay = -((s32)sinv << 8) - (((stepy << 5) + (stepy << 3) - stepy) >> 1);
 
-    rx = q16q8(ax); fxl = (u8)ax;
-    ry = q16q8(ay); fyl = (u8)ay;
-    sxh = q16q8(stepx); sxl = (u8)stepx;
-    syh = q16q8(stepy); syl = (u8)stepy;
-    fam = lvl_fam + ((u16)famoff << 6);
+    /* the ray direction in Q8 and its step (cr_ray steps it): Q8 part and the fraction below (the Q16 values without
+     * 32 bit sums) */
+    CR_RX = q16q8(ax); CR_FXL = (u8)ax;
+    CR_RY = q16q8(ay); CR_FYL = (u8)ay;
+    CR_SX = q16q8(stepx); CR_SXL = (u8)stepx;
+    CR_SY = q16q8(stepy); CR_SYL = (u8)stepy;
+    CR_FX = (u8)r_viewx;
+    CR_FY = (u8)r_viewy;
+    CR_MAP = (u16)map0;
+    CR_FAM = (u16)(lvl_fam + ((u16)(u8)gamestate.mapon << 6));
     for (i = 0; i < NRAYS; i++)
     {
-        u16 tdx, tdy, dist, t;
-        u8 v, side, tex = 0, u = 0, var = 0;
-
-        if (rx >= 0) { tdx = recip_q8[rx]; dist = 256 - fx; }
-        else         { tdx = recip_q8[-rx]; dist = fx; var |= 1; }
-        if (ry >= 0) { tdy = recip_q8[ry]; dd_sy = mulsat8(256 - fy, tdy); }
-        else         { tdy = recip_q8[-ry]; dd_sy = mulsat8(fy, tdy); var |= 2; }
-        dd_sx = mulsat8(dist, tdx);
-        dd_tx = tdx;
-        dd_ty = tdy;
-        dd_var = var;
-        dd_ptr = (u16)map0;
-
-        for (;;)
+        CR_I = i;
+        if (cr_ray())
         {
-            dd_run();
-            v = dd_val;
-            side = dd_side;
-            t = dd_t;
-            if (!(v & 0x80))
+            /* the DDA stopped at a door or the push wall: on from there */
+            s16 rx = CR_RX, ry = CR_RY;
+            u16 t;
+            u8 v, side, tex = 0, u = 0, var = dd_var;
+            for (;;)
             {
-                u8 id = v & 0x3F;
-                tex = side ? wall_y_tex[id] : wall_x_tex[id];
-                if (v & 0x40)
+                v = dd_val;
+                side = dd_side;
+                t = dd_t;
+                if (!(v & 0x80))
                 {
-                    /* a wall beside a door: the door frame on the face that looks at the door */
-                    u8 *prev = (u8 *)dd_ptr;
-                    if (side) prev += (var & 2) ? 1 : -1;
-                    else      prev += (var & 1) ? 64 : -64;
-                    if ((*prev & 0xC0) == 0x80)
-                        tex = side ? DOORW_FRAME : DOORW_FRAME + 1;
+                    u8 id = v & 0x3F;
+                    tex = side ? wall_y_tex[id] : wall_x_tex[id];
+                    if (v & 0x40)
+                    {
+                        /* a wall beside a door: the door frame on the face that looks at the door */
+                        u8 *prev = (u8 *)dd_ptr;
+                        if (side) prev += (var & 2) ? 1 : -1;
+                        else      prev += (var & 1) ? 64 : -64;
+                        if ((*prev & 0xC0) == 0x80)
+                            tex = side ? DOORW_FRAME : DOORW_FRAME + 1;
+                    }
+                    break;
                 }
-                break;
-            }
-            if ((v & 0xC0) == 0x80)
-            {
-                /* a door in the middle of its tile */
-                u8 n = v & 0x3F, vert = doorvert8[n], frac, pos = doorpos8[n];
-                u16 tm;
-                if (vert)
+                if ((v & 0xC0) == 0x80)
                 {
-                    if (side) goto pass;
-                    tm = t + (dd_tx >> 1);
-                    if (dd_sy <= tm) goto pass;
-                    frac = (u8)((u16)r_viewy + (u16)mulq8(tm, ry));
-                    if (frac < pos) goto pass;
-                    u = (frac - pos) >> 2;
-                    if (var & 1) u = 63 - u;
-                    tex = doorpage8[n] + 1;
+                    /* a door in the middle of its tile */
+                    u8 n = v & 0x3F, vert = doorvert8[n], frac, pos = doorpos8[n];
+                    u16 tm;
+                    if (vert)
+                    {
+                        if (side) goto pass;
+                        tm = t + (dd_tx >> 1);
+                        if (dd_sy <= tm) goto pass;
+                        frac = (u8)((u16)r_viewy + (u16)mulq8(tm, ry));
+                        if (frac < pos) goto pass;
+                        u = (frac - pos) >> 2;
+                        if (var & 1) u = 63 - u;
+                        tex = doorpage8[n] + 1;
+                    }
+                    else
+                    {
+                        if (!side) goto pass;
+                        tm = t + (dd_ty >> 1);
+                        if (dd_sx <= tm) goto pass;
+                        frac = (u8)((u16)r_viewx + (u16)mulq8(tm, rx));
+                        if (frac < pos) goto pass;
+                        u = (frac - pos) >> 2;
+                        if (!(var & 2)) u = 63 - u;
+                        tex = doorpage8[n];
+                    }
+                    t = tm;
+                    goto have_u;
                 }
                 else
                 {
-                    if (!side) goto pass;
-                    tm = t + (dd_ty >> 1);
-                    if (dd_sx <= tm) goto pass;
-                    frac = (u8)((u16)r_viewx + (u16)mulq8(tm, rx));
-                    if (frac < pos) goto pass;
-                    u = (frac - pos) >> 2;
-                    if (!(var & 2)) u = 63 - u;
-                    tex = doorpage8[n];
-                }
-                t = tm;
-                goto have_u;
-            }
-            else
-            {
-                /* the moving push wall: its face moves with cr_pwpos (1/64 tile) along its direction */
-                u8 id = v & 0x3F;
-                u8 tx_ = (u8)(((u16)dd_ptr - (u16)CR_TILEMAP) >> 6), ty_ = (u8)(((u16)dd_ptr - (u16)CR_TILEMAP) & 63);
-                if (pwstate && tx_ == pwx && ty_ == pwy)
-                {
-                    u8 axis_x = (pwalldir & 1);                 /* east / west */
-                    u8 pos_dir = (pwalldir == di_east || pwalldir == di_south);
-                    u8 rayneg = side ? (var & 2) : (var & 1);
-                    if (axis_x == !side && pos_dir == !rayneg)
+                    /* the moving push wall: its face moves with cr_pwpos (1/64 tile) along its direction */
+                    u8 id = v & 0x3F;
+                    u8 tx_ = (u8)(((u16)dd_ptr - (u16)CR_TILEMAP) >> 6), ty_ = (u8)(((u16)dd_ptr - (u16)CR_TILEMAP) & 63);
+                    if (pwstate && tx_ == pwx && ty_ == pwy)
                     {
-                        u16 off = (u16)cr_pwpos << 2, tm;
-                        tm = t + mulsat8(off, side ? dd_ty : dd_tx);
-                        if ((side ? dd_sx : dd_sy) <= tm)
-                            goto pass;
-                        t = tm;
+                        u8 axis_x = (pwalldir & 1);                 /* east / west */
+                        u8 pos_dir = (pwalldir == di_east || pwalldir == di_south);
+                        u8 rayneg = side ? (var & 2) : (var & 1);
+                        if (axis_x == !side && pos_dir == !rayneg)
+                        {
+                            u16 off = (u16)cr_pwpos << 2, tm;
+                            tm = t + mulsat8(off, side ? dd_ty : dd_tx);
+                            if ((side ? dd_sx : dd_sy) <= tm)
+                                goto pass;
+                            t = tm;
+                        }
                     }
+                    tex = side ? wall_y_tex[id] : wall_x_tex[id];
+                    break;
                 }
-                tex = side ? wall_y_tex[id] : wall_x_tex[id];
-                break;
-            }
 pass:
+                if (side == 0)
+                {
+                    u16 n = dd_sx + dd_tx;
+                    dd_sx = n < dd_sx ? 0xFFFF : n;
+                }
+                else
+                {
+                    u16 n = dd_sy + dd_ty;
+                    dd_sy = n < dd_sy ? 0xFFFF : n;
+                }
+                dd_run();
+            }
+
+            /* the position along the wall -> texture column */
             if (side == 0)
             {
-                u16 n = dd_sx + dd_tx;
-                dd_sx = n < dd_sx ? 0xFFFF : n;
+                u = (u8)((u16)r_viewy + (u16)mulq8(t, ry)) >> 2;
+                if (var & 1) u = 63 - u;
             }
             else
             {
-                u16 n = dd_sy + dd_ty;
-                dd_sy = n < dd_sy ? 0xFFFF : n;
+                u = (u8)((u16)r_viewx + (u16)mulq8(t, rx)) >> 2;
+                if (!(var & 2)) u = 63 - u;
             }
-        }
-
-        /* the position along the wall -> texture column */
-        if (side == 0)
-        {
-            u = (u8)((u16)r_viewy + (u16)mulq8(t, ry)) >> 2;
-            if (var & 1) u = 63 - u;
-        }
-        else
-        {
-            u = (u8)((u16)r_viewx + (u16)mulq8(t, rx)) >> 2;
-            if (!(var & 2)) u = 63 - u;
-        }
 have_u:
-        if (tex == 0xFF) tex = 0;
-        ray_t[i] = t;
-        ray_tex[i] = tex;
-        ray_u[i] = u;
-        ray_h[i] = hgt(t);
-        ray_pal[i] = fam[tex];
-        {
-            u16 c = (u16)fxl + sxl;
-            fxl = (u8)c;
-            rx += sxh + (s16)(c >> 8);
-            c = (u16)fyl + syl;
-            fyl = (u8)c;
-            ry += syh + (s16)(c >> 8);
+            if (tex == 0xFF) tex = 0;
+            ray_t[i] = t;
+            ray_tex[i] = tex;
+            ray_u[i] = u;
+            ray_h[i] = hgt(t);
+            ray_pal[i] = lvl_fam[((u16)(u8)gamestate.mapon << 6) + tex];
         }
     }
     TM_OFF();
 }
 
 /* ------------------------------------------------------------ drawing */
-static void scaler_for(u8 h, const u8 **sc, u8 *top)
-{
-    if (h <= 96)
-    {
-        *sc = scaler_data + scaler_small[h];
-        *top = 48 - (h >> 1);
-    }
-    else
-    {
-        u8 k = (u8)((h - 96 + 4) >> 3);
-        if (k < 1) k = 1;
-        if (k > 20) k = 20;
-        *sc = scaler_data + scaler_tall[k - 1];
-        *top = 0;
-    }
-}
-
-static void draw_walls(void)
-{
-    u8 i;
-    for (i = 0; i < NRAYS; i++)
-    {
-        const u8 *sc;
-        u8 top, tex = ray_tex[i];
-        scaler_for(ray_h[i], &sc, &top);
-        dc_sc = (u16)sc;
-        dc_fb = FB + (u16)(i >> 1) * COLBYTES + ((u16)top << 1);
-        dc_hi = 0x40 + ray_u[i];
-        dc_bank = tex_bank[tex];
-        if (i & 1) draw_right(); else draw_left();
-    }
-}
-
-/* the palette slots of the sprites (BG palettes 6 and 7) */
-static u8 slot_pool[2] = { 0xFF, 0xFF };
-static u8 spr_slot[MAXVISIBLE];
-
-static void assign_slots(void)
-{
-    u8 i, n = 0, np[2] = { 0xFF, 0xFF }, k, changed = 0;
-    for (i = numvis; i-- > 0; )             /* the nearest sprite first */
-    {
-        u8 p = spr_pool[vissprites[i].shape];
-        if (np[0] == p) k = 0;
-        else if (np[1] == p) k = 1;
-        else if (n < 2) { np[n] = p; k = n; n++; }
-        else k = 0;
-        spr_slot[i] = k;
-    }
-    for (k = 0; k < 2; k++)
-        if (np[k] != 0xFF && np[k] != slot_pool[k])
-        {
-            u8 j;
-            slot_pool[k] = np[k];
-            for (j = 0; j < 3; j++)
-                pal_bg[6 + k][1 + j] = pool_pal[np[k] * 3 + j];
-            changed = 1;
-        }
-    if (changed)
-        pal_commit();
-}
-
-static void draw_sprites(u8 bankbit)
-{
-    u8 s, i;
-    for (s = 0; s < numvis; s++)
-    {
-        VisSprite *vs = &vissprites[s];
-        u16 shape = vs->shape;
-        u8 h = vs->size, top, r0, r1, pal = (6 + spr_slot[s]) | bankbit;
-        s16 xl = vs->cx - (h >> 1);
-        s16 i0 = xl >> 2, i1 = (xl + h - 1) >> 2;
-        u16 step, base = spr_off[shape];
-        u8 x0 = spr_x0[shape], x1 = spr_x1[shape];
-        const u8 *sc;
-
-        if (i0 < 0) i0 = 0;
-        if (i1 > NRAYS - 1) i1 = NRAYS - 1;
-        if (i1 < i0)                            /* off the view: the u8 loop below would never end (i1 = 255) */
-            continue;
-        scaler_for(h, &sc, &top);
-        step = udiv32_16(16384, h);
-        {
-            /* the tile rows that get the sprite's palette: only those its drawn texels reach (the walls in those
-             * tiles take the sprite's colours, so the fewer the better) */
-            s16 y0 = 48 - (s16)(h >> 1) + (s16)(((u16)spr_t0[shape] * h) >> 6);
-            s16 y1 = 48 - (s16)(h >> 1) + (s16)((((u16)spr_t1[shape] + 1) * h) >> 6) - 1;
-            if (y0 < 0) y0 = 0;
-            if (y1 > VIEW_H - 1) y1 = VIEW_H - 1;
-            if (y0 > y1)                        /* (all of it below or above the view: no row) */
-            {
-                r0 = 1;
-                r1 = 0;
-            }
-            else
-            {
-                r0 = (u8)y0 >> 3;
-                r1 = (u8)y1 >> 3;
-            }
-        }
-        for (i = (u8)i0; i <= (u8)i1; i++)
-        {
-            s16 ofs;
-            u16 col;
-            u8 ty, tx = i >> 1;
-            if (vs->depth >= ray_t[i])
-                continue;
-            ofs = (s16)(i * 4 + 2) - xl;
-            if (ofs < 0) continue;
-            col = mulsat8((u16)ofs, step);
-            if (col < x0 || col > x1)
-                continue;
-            dc_s = base + ((col - x0) << 6);
-            dc_bank = spr_bank[shape];
-            dc_sc = (u16)sc;
-            dc_fb = FB + (u16)tx * COLBYTES + ((u16)top << 1);
-            if (i & 1) spr_right(); else spr_left();
-            for (ty = r0; ty <= r1; ty++)
-                view_attr[(u16)ty * 32 + tx] = pal;
-        }
-    }
-}
+/* the walls: draw_walls_a (cast_a.s) */
 
 /* ------------------------------------------------------------ sprites of the world */
 static s16 cqx, cqy;                    /* the camera in Q8 tiles */
 
-/* world position (Q8 tiles) -> screen centre, height and depth; FALSE when it can't be seen */
+/* world position (Q8 tiles) -> screen centre, height and depth; FALSE when it can't be seen (project_a, cast_a.s:
+ * depth = (dx cos - dy sin) >> 8 >= 64, lat = (dx sin + dy cos) >> 8 within depth + 160, centre 80 + lat * FOCAL / depth) */
+u8 project_a(s16 dx, s16 dy);
+#define PJ_D   (*(volatile u16 *)0xFFE7)
+#define PR_CX  (*(volatile s16 *)0xFFEE)
+#define PR_H   (*(volatile u8 *)0xFFF0)
+
 static u8 project(s16 dx, s16 dy, s16 *pcx, u8 *psize, u16 *pdepth)
 {
-    s32 d32 = smul16(dx, cosv) - smul16(dy, sinv);
-    s32 l32;
-    s16 depth, lat, cx;
-    u8 h;
-    depth = q16q8(d32);
-    if (depth < 64)
+    if (!project_a(dx, dy))
         return FALSE;
-    l32 = smul16(dx, sinv) + smul16(dy, cosv);
-    lat = q16q8(l32);
-    if (lat > depth + 160 || lat < -depth - 160)
-        return FALSE;
-    h = hgt((u16)depth);
-    {
-        s32 n = smul16(lat, FOCAL);
-        if (n >= 0) cx = VIEW_W / 2 + (s16)udiv32_16(n, (u16)depth);
-        else        cx = VIEW_W / 2 - (s16)udiv32_16(-n, (u16)depth);
-    }
-    if (cx + (h >> 1) < 0 || cx - (h >> 1) >= VIEW_W)
-        return FALSE;
-    *pcx = cx;
-    *psize = h;
-    *pdepth = (u16)depth;
+    *pcx = PR_CX;
+    *psize = PR_H;
+    *pdepth = PJ_D;
     return TRUE;
 }
 
@@ -384,7 +253,7 @@ static u8 sprite_seen(s16 cx, u8 h, u16 depth)
     return FALSE;
 }
 
-static void add_sprite(s16 cx, u8 h, u16 depth, u16 shape)
+static void add_sprite(s16 cx, u8 h, u16 depth, u16 shape)    /* (shape: | VS_ACTOR for the actors) */
 {
     VisSprite *vs;
     u8 i;
@@ -471,12 +340,12 @@ static void draw_scaleds(void)
 
     for (obj = player->next; obj; obj = obj->next)
     {
-        s16 shape = obj->state->shapenum, dx, dy;
+        s16 shape, dx, dy;
+        /* the actors that are not seen, not active and not in an area connected to the player's (most of them: the
+         * test comes first; their FL_VISABLE is already clear) */
         if (!(obj->flags & (FL_VISABLE | FL_ATTACKMODE)) && !obj->active && !areabyplayer[obj->areanumber])
-        {
-            obj->flags &= ~FL_VISABLE;
             continue;
-        }
+        shape = obj->state->shapenum;
         /* bits 8..23 of the position (Q8 tiles), read as bytes: SDCC 4.2 miscompiled the s32 >> 8 here (dy took
          * stale bytes of dx), which put every actor off screen */
         dx = (s16)(*(const u16 *)((const u8 *)&obj->x + 1) - r_viewx);
@@ -503,17 +372,29 @@ static void draw_scaleds(void)
         if (obj->state->rotate)
             shape += CalcRotate(obj);
         obj->flags |= FL_VISABLE;
-        add_sprite(cx, h, depth, (u16)shape);
+        add_sprite(cx, h, depth, (u16)shape | VS_ACTOR);
     }
 }
 
 /* ------------------------------------------------------------ the frame */
-void render_present(void)
+/* Two frames can be in the DMA queue: frame k is drawn into the buffers of parity k & 1 (the view buffer in WRAM bank 3
+ * or 7, the enemies' tiles in bank 6 at 0xD000 or 0xD400, a copy of the OAM in bank 6 at 0xDC00 or 0xDD00) while the
+ * other frame is still being copied; the attributes (one buffer) are copied first. */
+#define FB_BANK(p)   ((p) ? WB_FRAME2 : WB_FRAME)
+#define OAM_COPY(p)  ((p) ? 0xDD : 0xDC)
+static u8 r_back;                       /* the VRAM bank / BG map of the frame being drawn */
+
+static void render_present(u8 back)
 {
-    u8 back = map_front ^ 1;
     u16 map = back ? 0x9C00 : 0x9800;
-    dma_queue((const void *)FB, 0xFF, WB_FRAME, back, 0x8000, VIEW_TILES * 16);
     dma_queue(view_attr, 0xFF, 0, 1, map, VIEW_TH * 32);
+    attr_mark_queue();                  /* (the next frame may write view_attr once that is done) */
+    dma_queue((const void *)FB, 0xFF, FB_BANK(back), back, VIEW_VRAM, VIEW_TILES * 16);
+    spr_queue(back);                    /* the enemies' tiles, the weapon's tiles */
+    rSVBK = WB_SPRITES;
+    memcpy((void *)((u16)OAM_COPY(back) << 8), oam_buf, 160);
+    rSVBK = WB_ACTORAT;
+    oam_queue(WB_SPRITES, OAM_COPY(back));  /* the sprites and the flip show everything of this frame together */
     flip_queue();
 }
 
@@ -532,17 +413,20 @@ void ThreeDRefresh (void) B
     r_viewx = (u16)(viewx >> 8);
     r_viewy = (u16)(viewy >> 8);
     {
-        u16 ai = (u16)(((u32)(u16)viewangle * 728) >> 8);  /* degrees -> 1/1024 turns (32 bits: 359 * 728 does not fit in 16) */
+        u16 ai = umulq8((u16)viewangle, 728);   /* degrees -> 1/1024 turns: (a * 728) >> 8 (359 * 728 needs 18 bits) */
         sinv = sin1024[ai];
         cosv = sin1024[ai + 256];
     }
 
     cast_rays();
     draw_scaleds();
-    assign_slots();
+    spr_slots();
 
-    dma_wait();
-    back = map_front ^ 1;
+    while (attr_busy)                   /* the previous frame's attributes are copied */
+        wait_vblank();
+    if (!vframes)                       /* nothing in the queue: the frame goes to what is not shown */
+        r_back = map_front ^ 1;
+    back = r_back;
     bankbit = back ? 0x08 : 0;
     /* palette of each tile column: the nearer of its two rays (the first row computed, the others copied) */
     {
@@ -554,14 +438,18 @@ void ThreeDRefresh (void) B
         for (ty = 1; ty < VIEW_TH; ty++)
             memcpy(view_attr + (u16)ty * 32, view_attr, VIEW_TW);
     }
-    rSVBK = WB_FRAME;
-    fb_clear();
-    draw_walls();
-    draw_sprites(bankbit);
+    weapon_show(gamestate.weapon, gamestate.weaponframe);  /* the attack frames (only the changes cost anything) */
+    spr_plan();                         /* the weapon's OAM entries, then which enemies are hardware sprites */
+    while (vframes >= 2)                /* the frame before the previous one has left this parity's buffers */
+        wait_vblank();
+    rSVBK = FB_BANK(back);
+    draw_walls_a();                     /* (it clears what the walls do not cover) */
+    spr_draw_sw(bankbit);
+    spr_draw_hw(back);
     rSVBK = WB_ACTORAT;
     hud_flush();
-    weapon_show(gamestate.weapon, gamestate.weaponframe);  /* the attack frames (only the changes cost anything) */
-    render_present();
+    render_present(back);
+    r_back = back ^ 1;
 }
 
 /* ------------------------------------------------------------ setup */
@@ -572,7 +460,7 @@ void render_init(void) __banked
     for (ty = 0; ty < VIEW_TH; ty++)
         for (tx = 0; tx < VIEW_TW; tx++)
         {
-            t = tx * VIEW_TH + ty;
+            t = (u8)(tx * VIEW_TH + ty + 128);   /* the signed tile addressing: index 0 is tile 128 (0x8800) */
             vram_set(0, 0x9800 + ty * 32 + tx, &t, 1);
             vram_set(0, 0x9C00 + ty * 32 + tx, &t, 1);
             a = 0;
@@ -581,7 +469,14 @@ void render_init(void) __banked
             vram_set(1, 0x9C00 + ty * 32 + tx, &a, 1);
         }
     memset(view_attr, 0, sizeof(view_attr));
-    slot_pool[0] = slot_pool[1] = 0xFF;
+    for (a = 0; a < 2; a++)             /* the frame buffers: every row of every column may hold something */
+    {
+        rSVBK = a ? WB_FRAME2 : WB_FRAME;
+        memset(FB_SPAN_TOP, 0, VIEW_TW);
+        memset(FB_SPAN_BOT, VIEW_H, VIEW_TW);
+    }
+    rSVBK = WB_ACTORAT;
+    spr_reset();
     sc_valid = 0;
 }
 

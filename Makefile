@@ -15,7 +15,7 @@ BANK4   = src/game/wl_act2.c
 BANK5   = src/render.c gen/assets_r.c
 BANK6   = src/vid.c src/hud.c src/weapon.c src/input.c gen/assets_h.c
 BANK7   = src/ui.c src/menu.c src/inter.c gen/assets_u.c
-BANK8   =
+BANK8   = src/rspr.c gen/assets_p.c
 BANK9   = src/save.c
 BANK10  = src/snd.c gen/assets_s.c
 BANKS   = $(foreach b,1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20,$(if $(BANK$(b)),$(b)))
@@ -23,7 +23,8 @@ BANKS   = $(foreach b,1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20,$(if $(
 rel = $(OUT)/$(notdir $(1:.c=.rel))
 FIXED_REL  = $(foreach f,$(FIXED),$(call rel,$(f)))
 BANKED_REL = $(foreach b,$(BANKS),$(foreach f,$(BANK$(b)),$(call rel,$(f))))
-ASM_REL    = $(OUT)/crt0.rel $(OUT)/hw_a.rel $(OUT)/cartsyms.rel $(OUT)/mathz_a.rel $(OUT)/render_a.rel $(OUT)/snd_a.rel
+ASM_REL    = $(OUT)/crt0.rel $(OUT)/hw_a.rel $(OUT)/cartsyms.rel $(OUT)/mathz_a.rel $(OUT)/render_a.rel $(OUT)/snd_a.rel \
+             $(OUT)/cast_a.rel
 HDRS       = $(wildcard src/*.h src/game/*.h) gen/assets.h
 
 all: $(ROM)
@@ -31,7 +32,7 @@ all: $(ROM)
 $(OUT):
 	mkdir -p $(OUT) rom
 
-gen/assets.h gen/assets_tab.c gen/assets_r.c gen/assets_h.c gen/assets_u.c gen/assets_s.c gen/rndtable.c gen/data.bin: tools/*.py
+gen/assets.h gen/assets_tab.c gen/assets_r.c gen/assets_p.c gen/assets_h.c gen/assets_u.c gen/assets_s.c gen/rndtable.c gen/data.bin: tools/*.py
 	cd tools && python3 build_assets.py
 
 $(OUT)/%.rel: src/%.s | $(OUT)

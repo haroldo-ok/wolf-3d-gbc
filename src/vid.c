@@ -130,6 +130,7 @@ void VW_ColorBorder(u8 color) B
     (void)color;
 }
 
+void gdma_calibrate(void);
 /* the play screen: the view, the HUD and the weapon; the display is on afterwards, palettes as they were */
 void vid_init_game(void) B
 {
@@ -143,7 +144,8 @@ void vid_init_game(void) B
     weapon_load();
     oam_clear();
     pal_commit();
-    lcd_on(LCDC_BGON | LCDC_OBJON | LCDC_BGDATA8000);
+    lcd_on(LCDC_BGON | LCDC_OBJON | LCDC_OBJ16);      /* (BG tiles: signed addressing, see render.h) */
+    gdma_calibrate();                                   /* how many VRAM copies a VBlank takes (hw_a.s) */
 }
 
 /* the fizzle: the new view appears cell by cell in pseudo random order */

@@ -177,6 +177,7 @@ def build():
     icon0 = face0 + 16
     total = icon0 + 18
     assert total <= 128, total
+    assert total <= WPN_T0, (total, WPN_T0)       # the weapon's OBJ tiles follow the HUD's in VRAM bank 0
     for j in range(4):
         for i in range(4):
             cmap[FACE_R + j, FACE_C + i] = face0 + j * 4 + i
@@ -222,9 +223,16 @@ if __name__ == '__main__':
     render_preview(h, '/tmp/hud.png')
 
 
-# ------------------------------------------------------------------ weapon sprites (OBJ, 8x8, 1:1)
+# ------------------------------------------------------------------ weapon sprites (OBJ, 8x16, 1:1)
+# The play screen shows the 3-D view through the signed BG tile addressing (tiles at 0x8800..0x96FF), which leaves the
+# tiles at 0x8000..0x87FF to the sprites; bank 0 of them starts with the HUD (static + face + icons = 88 tiles, see
+# build()), the rest is the weapon's.  The enemies use bank 1 (src/render.c).  The OBJ size is 8x16 for the whole
+# play screen: an entry is a pair of tiles one above the other and has ONE palette.
 WPN_CANVAS_X, WPN_CANVAS_Y = 48, 32          # the 64x64 shape sits at the bottom centre of the 160x96 view
 WPN_FIRST = 416
+WPN_T0 = 88                                  # first OBJ tile (VRAM bank 0) of the weapon: right after the HUD tiles
+WPN_SLOTS = 16                               # tile pairs the weapon may use (tiles 88..119)
+WPN_NPAL = 6                                 # OBJ palettes 0..5 are the weapon's; 6 and 7 are the enemies' (render.c)
 
 
 def _opaque(d, i):
@@ -281,7 +289,7 @@ def _quant_masked(tiles, npal=8, ncol=3):
     asg = [min(range(len(pals)), key=lambda g: cost(px, pals[g])[0]) for px in pxs]
     res = []
     for t, (rgb, mask) in enumerate(tiles):
-        idx = np.zeros((8, 8), np.uint8)
+        idx = np.zeros(mask.shape, np.uint8)
         _, a = cost(rgb[mask], pals[asg[t]])
         idx[mask] = a + 1
         res.append((asg[t], idx))
@@ -291,45 +299,43 @@ def _quant_masked(tiles, npal=8, ncol=3):
 
 
 def build_weapons():
-    """per weapon: 8 OBJ palettes; per frame: a blob  n, nt0, nt1, n * (y, x, tile, attr), tiles (nt0 for VRAM bank 0 then nt1 bank 1)"""
+    """per weapon: 8 OBJ palettes (the last two are unused); per frame: a blob  n, nt, n * (y, x, tile, attr), tiles
+    (nt tiles for VRAM bank 0 at WPN_T0).  An entry is an 8x16 sprite: a tile pair, one palette."""
     d = G.data()
     wpal = []
     blobs = []
     for w in range(4):
-        frames = []
         tiles = []
         keys = []
         for f in range(5):
             a, rgb = _opaque(d, WPN_FIRST + w * 5 + f)
-            assert not a[:24].any()
-            for ty in range(3, 8):
+            assert not a[:16].any()
+            for k in range(3):                              # tile rows (2,3) (4,5) (6,7): the shape starts on row 3
                 for tx in range(8):
-                    m = a[ty * 8:ty * 8 + 8, tx * 8:tx * 8 + 8]
+                    y0 = (2 + 2 * k) * 8
+                    m = a[y0:y0 + 16, tx * 8:tx * 8 + 8]
                     if m.any():
-                        tiles.append((rgb[ty * 8:ty * 8 + 8, tx * 8:tx * 8 + 8], m))
-                        keys.append((f, ty, tx))
-        pals, res = _quant_masked(tiles)
-        wpal.append([[0] + p for p in pals])
+                        tiles.append((rgb[y0:y0 + 16, tx * 8:tx * 8 + 8], m))
+                        keys.append((f, k, tx))
+        pals, res = _quant_masked(tiles, npal=WPN_NPAL)
+        wpal.append([[0] + p for p in pals] + [[0, 0, 0, 0]] * (8 - len(pals)))
         for f in range(5):
             ents = []
             uniq = {}
             slots = []
-            for (kf, ty, tx), (pg, idx) in zip(keys, res):
+            for (kf, k, tx), (pg, idx) in zip(keys, res):
                 if kf != f:
                     continue
-                b = G.tile_bytes(idx)
+                b = G.tile_bytes(idx[:8]) + G.tile_bytes(idx[8:])
                 if (b, pg) not in uniq:
                     uniq[(b, pg)] = len(slots)
                     slots.append(b)
-                ents.append((ty, tx, uniq[(b, pg)], pg))
-            assert len(slots) <= 32, (w, f, len(slots))
-            nt0 = min(16, len(slots))
-            nt1 = len(slots) - nt0
+                ents.append((k, tx, uniq[(b, pg)], pg))
+            assert len(slots) <= WPN_SLOTS, (w, f, len(slots))
             oam = bytearray()
-            for ty, tx, s, pg in ents:
-                bank = 1 if s >= 16 else 0
-                oam += bytes([WPN_CANVAS_Y + ty * 8 + 16, WPN_CANVAS_X + tx * 8 + 8, 240 + (s & 15), pg | (bank << 3)])
-            hdr = bytes([len(ents), nt0, nt1]) + bytes(oam)
+            for k, tx, s, pg in ents:
+                oam += bytes([WPN_CANVAS_Y + (2 + 2 * k) * 8 + 16, WPN_CANVAS_X + tx * 8 + 8, WPN_T0 + 2 * s, pg])
+            hdr = bytes([len(ents), 2 * len(slots)]) + bytes(oam)
             hdr += bytes(-len(hdr) % 16)              # the tile data is a DMA source: 16 byte aligned
             blobs.append(hdr + b''.join(slots))
     return wpal, blobs

@@ -6,8 +6,8 @@
 	.area	_CODE
 
 	.globl	_dd_run, _dd_var, _dd_sx, _dd_sy, _dd_tx, _dd_ty, _dd_ptr, _dd_t, _dd_side, _dd_val
-	.globl	_fb_clear, _draw_left, _draw_right, _spr_left, _spr_right
-	.globl	_dc_fb, _dc_sc, _dc_hi, _dc_s, _dc_bank, _dc_old, _cur_rom_bank
+	.globl	_draw_left, _draw_right, _spr_left, _spr_right, _pair_empty, _clr32
+	.globl	_dc_fb, _dc_sc, _dc_hi, _dc_s, _dc_bank, _dc_old, _dc_n, _cur_rom_bank
 
 	.area	_DATA
 _dd_var::	.ds	1		; bit 0: x step is -1 ; bit 1: y step is -1
@@ -25,6 +25,7 @@ _dc_hi::	.ds	1		; draw: texture page (high byte of the address)
 _dc_s::		.ds	2		; sprite: pointer to the column (ROM)
 _dc_bank::	.ds	1		; ROM bank of the texture / sprite data
 _dc_old::	.ds	1
+_dc_n::		.ds	1		; draw: rows of a wall column (1..96)
 
 	.area	_CODE
 
@@ -156,19 +157,6 @@ hitcommony:
 	ld	(_dd_sy + 1),a
 	ret
 
-; ------------------------------------------------------------------ frame buffer
-; clear the 3840 bytes at 0xD000 (WRAM bank 3 mapped)
-_fb_clear::
-	ld	hl,#0xD000
-	xor	a,a
-	ld	b,#240
-1$:	.rept	16
-	ld	(hl+),a
-	.endm
-	dec	b
-	jr	nz,1$
-	ret
-
 ; map the data bank (_dc_bank) into 0x4000 for the length of a draw routine; the caller's bank comes back at the end
 .macro BANKIN
 	ld	a,(_cur_rom_bank)
@@ -184,141 +172,213 @@ drawdone:
 	ret
 
 ; ------------------------------------------------------------------ wall columns
-; rows of one ray: scaler bytes (2*texel row, terminated by a byte with bit 7 set) -> texture page (high byte _dc_hi)
+; rows of one ray: _dc_n rows (1..96) of scaler bytes (2*texel row) -> texture page (high byte _dc_hi); the frame
+; buffer in HL, the texture in BC (B the page), the scaler in DE.  Unrolled by 8 (entered in the middle for the rows
+; that are not a multiple of 8), the groups of 8 counted in HRAM.
+DC_CNT = 0xFFC0
+LROW = 8				; bytes of a row of the loops below
+RROW = 12
+
+; the entry of an unrolled loop of 8 rows: A = rows (1..96), C = bytes a row -> the target address pushed
+.macro DUFF lab, rowsz
+	ld	c,a
+	add	a,#7
+	rrca
+	rrca
+	rrca
+	and	a,#0x1F
+	ldh	(DC_CNT),a		; groups of 8 (the first one partial)
+	ld	a,c
+	and	a,#7
+	jr	z,1$
+	cpl
+	add	a,#9			; rows skipped in the first group: 8 - n % 8
+	ld	c,a
+	add	a,a
+	add	a,a
+	add	a,a			; * 8
+.if rowsz - 8
+	add	a,c
+	add	a,c
+	add	a,c
+	add	a,c			; * 12
+.endif
+1$:	add	a,#<lab
+	ld	l,a
+	ld	a,#0
+	adc	a,#>lab
+	ld	h,a
+	push	hl
+	ld	hl,#_dc_sc
+	ld	a,(hl+)
+	ld	e,a
+	ld	a,(hl+)
+	ld	d,a
+	ld	b,(hl)			; _dc_hi
+	ld	hl,#_dc_fb
+	ld	a,(hl+)
+	ld	h,(hl)
+	ld	l,a
+	ret				; into the loop
+.endm
+
 _draw_left::
 	BANKIN
-	ld	hl,#_dc_fb
-	ld	e,(hl)
-	inc	hl
-	ld	d,(hl)
-	inc	hl
-	ld	c,(hl)
-	inc	hl
-	ld	b,(hl)
-	ld	a,(_dc_hi)
-	ld	h,a
-1$:	ld	a,(bc)			; the left ray comes first on a cleared column: store, no need to OR
-	inc	bc
-	bit	7,a
-	jp	nz,drawdone
-	ld	l,a
-	ld	a,(hl+)
-	ld	(de),a
+	ld	a,(_dc_n)
+	DUFF	2$, LROW
+2$:	.rept	8			; the left ray comes first on a cleared column: store, no need to OR
+	ld	a,(de)
 	inc	de
-	ld	a,(hl)
-	ld	(de),a
-	inc	de
-	jr	1$
+	ld	c,a
+	ld	a,(bc)
+	ld	(hl+),a
+	inc	c
+	ld	a,(bc)
+	ld	(hl+),a
+	.endm
+	ldh	a,(DC_CNT)
+	dec	a
+	ldh	(DC_CNT),a
+	jr	nz,2$
+	jp	drawdone
 
 _draw_right::
 	BANKIN
-	ld	hl,#_dc_fb
-	ld	e,(hl)
-	inc	hl
-	ld	d,(hl)
-	inc	hl
-	ld	c,(hl)
-	inc	hl
-	ld	b,(hl)
-	ld	a,(_dc_hi)
-	ld	h,a
-1$:	ld	a,(bc)
-	inc	bc
-	bit	7,a
-	jp	nz,drawdone
-	or	a,#0x80
-	ld	l,a
+	ld	a,(_dc_n)
+	DUFF	2$, RROW
+2$:	.rept	8
 	ld	a,(de)
-	or	a,(hl)
-	ld	(de),a
-	inc	l
 	inc	de
-	ld	a,(de)
+	or	a,#0x80			; the right ray's copy of the texture: the high half of the page
+	ld	c,a
+	ld	a,(bc)
 	or	a,(hl)
-	ld	(de),a
-	inc	de
-	jr	1$
+	ld	(hl+),a
+	inc	c
+	ld	a,(bc)
+	or	a,(hl)
+	ld	(hl+),a
+	.endm
+	ldh	a,(DC_CNT)
+	dec	a
+	ldh	(DC_CNT),a
+	jr	nz,2$
+	jp	drawdone
 
 ; ------------------------------------------------------------------ sprite columns
-; the column (64 texel values 0..3, _dc_s) is drawn through the scaler into the 4 pixels of the strip, over the walls
-.macro SPR_ROW keep, set
-1$:	ld	a,(bc)
-	inc	bc
+; the column (_dc_s: 128 bytes, 128-byte aligned, two bytes a texel row: plane 0 and plane 1 as 0x00 / 0xFF, or 0x55
+; for a transparent texel) is drawn through the scaler into the 4 pixels of the strip (mask S), over what is there:
+; byte = ((texel ^ byte) & S) ^ byte.  HL frame buffer, BC column (B its page, C the row), DE scaler.
+SPR_CLEAR = 0x55
+
+.macro SPR_LOOP odd, s, lab
+lab'r:	ld	a,(de)
+	inc	de
 	bit	7,a
 	jp	nz,drawdone
-	srl	a			; texel row
-	ld	hl,#_dc_s
-	push	de
-	ld	e,(hl)
+.if odd
+	or	a,#0x80
+.endif
+	ld	c,a
+	ld	a,(bc)
+	cp	a,#SPR_CLEAR
+	jr	z,lab't
+	xor	a,(hl)
+	and	a,#s
+	xor	a,(hl)
+	ld	(hl+),a
+	inc	c
+	ld	a,(bc)
+	xor	a,(hl)
+	and	a,#s
+	xor	a,(hl)
+	ld	(hl+),a
+	jr	lab'r
+lab't:	inc	hl
 	inc	hl
-	ld	d,(hl)
-	ld	l,a
-	ld	h,#0
-	add	hl,de
-	pop	de
-	ld	a,(hl)			; texel value
-	or	a,a
-	jr	nz,2$
-	inc	de
-	inc	de
-	jr	1$
-2$:	dec	a
-	jr	z,3$			; value 1: plane 0
-	dec	a
-	jr	z,4$			; value 2: plane 1
-	ld	a,(de)			; value 3: both
-	and	a,#keep
-	or	a,#set
-	ld	(de),a
-	inc	de
-	ld	a,(de)
-	and	a,#keep
-	or	a,#set
-	ld	(de),a
-	inc	de
-	jr	1$
-3$:	ld	a,(de)
-	and	a,#keep
-	or	a,#set
-	ld	(de),a
-	inc	de
-	ld	a,(de)
-	and	a,#keep
-	ld	(de),a
-	inc	de
-	jr	1$
-4$:	ld	a,(de)
-	and	a,#keep
-	ld	(de),a
-	inc	de
-	ld	a,(de)
-	and	a,#keep
-	or	a,#set
-	ld	(de),a
-	inc	de
-	jr	1$
+	jr	lab'r
 .endm
+
+; DE = scaler, B = page of the column, HL = frame buffer; carry = the column is the odd one of its page.  The scaler
+; rows above the column's first drawn row (kept in a transparent row 0) are skipped.
+sprsetup:
+	ld	hl,#_dc_sc
+	ld	a,(hl+)
+	ld	e,a
+	ld	d,(hl)
+	ld	hl,#(_dc_s + 1)
+	ld	a,(hl-)
+	ld	b,a
+	ld	c,(hl)
+	ld	hl,#_dc_fb
+	ld	a,(hl+)
+	ld	h,(hl)
+	ld	l,a
+	ld	a,(bc)			; row 0
+	cp	a,#SPR_CLEAR
+	jr	nz,2$
+	inc	c
+	ld	a,(bc)			; 2 * the first drawn row
+	dec	c
+	push	bc
+	ld	c,a
+1$:	ld	a,(de)			; (the end of the scaler, 0xFF, stops this too)
+	cp	a,c
+	jr	nc,3$
+	inc	de
+	inc	hl
+	inc	hl
+	jr	1$
+3$:	pop	bc
+2$:	ld	a,c
+	rla
+	ret
 
 _spr_left::
 	BANKIN
-	ld	hl,#_dc_fb
-	ld	e,(hl)
-	inc	hl
-	ld	d,(hl)
-	inc	hl
-	ld	c,(hl)
-	inc	hl
-	ld	b,(hl)
-	SPR_ROW 0x0F, 0xF0
+	call	sprsetup
+	jr	c,sl1r
+	SPR_LOOP 0, 0xF0, sl0
+	SPR_LOOP 1, 0xF0, sl1
 
 _spr_right::
 	BANKIN
-	ld	hl,#_dc_fb
-	ld	e,(hl)
+	call	sprsetup
+	jr	c,sr1r
+	SPR_LOOP 0, 0x0F, sr0
+	SPR_LOOP 1, 0x0F, sr1
+
+; ------------------------------------------------------------------ the enemies' tile buffers (rspr.c)
+; u8 pair_empty(u16 p (DE)): 1 when the 32 bytes at p are all 0
+_pair_empty::
+	ld	h,d
+	ld	l,e
+	xor	a,a
+	ld	b,#8
+1$:	or	a,(hl)
 	inc	hl
-	ld	d,(hl)
+	or	a,(hl)
 	inc	hl
-	ld	c,(hl)
+	or	a,(hl)
 	inc	hl
-	ld	b,(hl)
-	SPR_ROW 0xF0, 0x0F
+	or	a,(hl)
+	inc	hl
+	dec	b
+	jr	nz,1$
+	or	a,a
+	ld	a,#0
+	ret	nz
+	inc	a
+	ret
+
+; void clr32(u16 p (DE), u16 n (BC)): clear n blocks of 32 bytes at p (n >= 1)
+_clr32::
+	ld	h,d
+	ld	l,e
+	xor	a,a
+1$:	.rept	32
+	ld	(hl+),a
+	.endm
+	dec	c
+	jr	nz,1$
+	ret
